@@ -11,5 +11,31 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/cec-ctl --device=/dev/cec0 --playback --osd-name=CableBox
 
+# cec-ctl only needs /dev/cec0 (it runs as root to open it).
+DevicePolicy=closed
+DeviceAllow=/dev/cec0 rw
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+
 [Install]
 WantedBy=cablebox.service

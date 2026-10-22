@@ -56,8 +56,9 @@ sudo apt install build-essential pkg-config libmpv-dev libfontconfig-dev libxkbc
                  libinput-dev libgbm-dev libudev-dev libdrm-dev ffmpeg
 ```
 
-Rust 1.88+ is required (Slint is pinned to 1.14.1 for that MSRV; the workspace uses the
-MSRV-aware resolver).
+Rust 1.89+ is required (zbus 6). Slint is pinned to 1.14.1, and the workspace uses the
+MSRV-aware resolver. The windowed `winit` backend is a default, development-only feature.
+Packages are built with `--no-default-features --features kms`.
 
 Run against the mock server in a window:
 
@@ -131,6 +132,24 @@ without a password. The service takes over tty1. Its config lives in
 Display: `Settings → Display → Resolution` picks a connector mode (applied through
 `SLINT_DRM_MODE` on restart). Interface size defaults to the screen height ÷ 720.
 
+## Security
+
+- **Tvheadend login:** prefer **Digest**. Basic login over `http://` sends the password readable
+  on the network, and Settings marks it "Basic (unencrypted!)". `https://` servers are supported
+  (rustls with the system CA store, certificates verified). Credentials are only ever sent to the
+  configured server, never to external channel-logo hosts.
+- **Settings PIN** (Settings → System): protects Settings, installing updates, reboot/power off,
+  and cancelling or deleting recordings. Five wrong tries lock it for 60 s. Forgot it? Delete the
+  `pin = ...` line from `/var/lib/cablebox/.config/cablebox/config.toml` over SSH.
+- **Sandbox:** `cablebox.service` runs with systemd hardening (`systemd-analyze security`
+  exposure 1.8). The `cablebox` user still needs the `input` group so it can read remotes.
+- **Untrusted input limits:** API replies are capped at 64 MiB, logos at 2 MiB and 4096×4096
+  pixels. mpv loads no user config or scripts, and ffmpeg may only open http/https/tcp/tls.
+- **Updates:** only signed packages from configured repos (PackageKit `ONLY_TRUSTED`). The
+  `cablebox` package ships the apt repo's keyring, so key rotations arrive as normal updates.
+- **Dependencies:** `cargo audit` is clean. Accepted "unmaintained" notices are documented
+  in `.cargo/audit.toml`.
+
 ## Status
 
 Verified on an x86_64 desktop (winit backend, VAAPI decoding) against the mock server:
@@ -144,7 +163,11 @@ Still to verify on hardware:
 - Whether `/sys/class/drm/*/modes` order matches `SLINT_DRM_MODE` indices.
 - An end-to-end update install and reboot.
 
+- The systemd sandbox with real DRM, audio and remotes. It was tested locally with the
+  winit backend under the same seccomp/namespace settings. If something breaks on a box,
+  `systemctl edit cablebox` can relax a single setting.
+
 Not yet implemented:
 - Tvheadend comet push updates (DVR state is polled every 60s).
 - Reminders.
-- Parental controls.
+- Per-channel parental controls (the settings PIN exists).

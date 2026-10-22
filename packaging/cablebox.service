@@ -21,6 +21,35 @@ UtmpIdentifier=tty1
 Environment=SLINT_BACKEND=linuxkms
 Environment=RUST_LOG=info
 ExecStart=/usr/bin/cablebox
+
+# Sandboxing. CableBox decodes untrusted network video, so keep the blast radius small.
+# Not set on purpose: PrivateDevices (needs /dev/dri, /dev/input, /dev/snd) and
+# MemoryDenyWriteExecute (Mesa and ffmpeg JIT). If a box misbehaves, test without these
+# with `systemctl edit cablebox` and report which line broke it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cablebox
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=all
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
 # "Restart CableBox" in Settings (and self-updates) exit the process; come straight back.
 Restart=always
 RestartSec=1
