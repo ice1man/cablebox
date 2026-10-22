@@ -76,11 +76,15 @@ pub struct Remote {
     pub cec: bool,
     /// Device name shown on the TV's CEC menu.
     pub cec_name: String,
+    /// SSH server state chosen in Settings, re-applied at startup. `None` leaves the
+    /// system's own setting alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<bool>,
 }
 
 impl Default for Remote {
     fn default() -> Self {
-        Self { cec: true, cec_name: "CableBox".into() }
+        Self { cec: true, cec_name: "CableBox".into(), ssh: None }
     }
 }
 

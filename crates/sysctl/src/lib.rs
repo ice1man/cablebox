@@ -3,6 +3,7 @@
 
 pub mod network;
 pub mod power;
+pub mod services;
 pub mod updates;
 
 #[derive(Debug, thiserror::Error)]

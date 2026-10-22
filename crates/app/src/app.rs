@@ -181,6 +181,7 @@ impl App {
         if let Some(v) = self.cfg.ui.volume {
             let _ = self.player.set_volume(v);
         }
+        self.apply_ssh_preference();
         if self.cfg.is_configured() {
             self.connect();
         } else {

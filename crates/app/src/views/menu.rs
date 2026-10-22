@@ -2,6 +2,7 @@
 
 use input::RemoteKey;
 use sysctl::network::{AccessPointInfo, Status};
+use sysctl::services::State;
 
 use crate::app::{model, App};
 use crate::config::AuthMode;
@@ -44,6 +45,8 @@ enum Act {
     JoinWifi(usize),
     CheckUpdates,
     Pin,
+    Ssh,
+    Console,
     Do(Action),
     None,
 }
@@ -72,6 +75,8 @@ pub struct MenuState {
     pub scanning: bool,
     pub net: Option<Status>,
     pub server_info: String,
+    /// SSH server state; `None` while checking.
+    pub ssh: Option<sysctl::services::State>,
 }
 
 impl MenuState {
@@ -145,6 +150,7 @@ impl App {
         self.menu.stack.push((page, 0));
         match page {
             Page::Network => self.refresh_network(),
+            Page::System => self.refresh_ssh(),
             Page::Server | Page::Setup => self.menu.server_info.clear(),
             _ => {}
         }
@@ -237,9 +243,20 @@ impl App {
                 Item::new("Check for updates", self.updates.summary(), Act::CheckUpdates),
                 Item::new("Automatic update checks", on_off(c.updates.auto_check), Act::Cycle(Field::AutoUpdate)),
                 Item::new("Settings PIN", on_off(c.ui.pin.is_some()), Act::Pin),
+                match self.menu.ssh {
+                    Some(State::NotInstalled) => Item::info("Remote access (SSH)", "Not installed"),
+                    Some(State::Running) => Item::new("Remote access (SSH)", self.ssh_address(), Act::Ssh),
+                    Some(State::Stopped) => Item::new("Remote access (SSH)", "Off", Act::Ssh),
+                    None => Item::info("Remote access (SSH)", "Checking…"),
+                },
                 Item::new("Restart CableBox", "", Act::Do(Action::RestartApp)),
                 Item::new("Reboot", "", Act::Do(Action::Reboot)),
                 Item::new("Power off", "", Act::Do(Action::PowerOff)),
+                if sysctl::services::running_as_unit("cablebox.service") {
+                    Item::new("Exit to console", "", Act::Console)
+                } else {
+                    Item::info("Exit to console", "Only on a box")
+                },
             ],
         }
     }
@@ -326,6 +343,24 @@ impl App {
                 }
             }
             Act::CheckUpdates => self.check_updates(true),
+            Act::Ssh => {
+                let on = self.menu.ssh != Some(State::Running);
+                let (title, body, label) = if on {
+                    (
+                        "Turn on remote access?",
+                        "Starts the SSH server so you can log in to this box from another computer. Anyone on your network can try to log in, so use strong passwords or SSH keys.",
+                        "Turn On",
+                    )
+                } else {
+                    ("Turn off remote access?", "Stops the SSH server. Open sessions may be disconnected.", "Turn Off")
+                };
+                self.show_dialog(Dialog::new(title, body, vec![(label, Action::SetSsh(on)), ("Cancel", Action::Close)]));
+            }
+            Act::Console => self.show_dialog(Dialog::new(
+                "Exit to console?",
+                "TV stops and a login prompt appears. Log in with a keyboard. To come back, run 'sudo systemctl start cablebox' or reboot.",
+                vec![("Exit to Console", Action::ExitToConsole), ("Cancel", Action::Close)],
+            )),
             Act::Pin if self.cfg.ui.pin.is_none() => self.run_action(Action::SetPin),
             Act::Pin => self.show_dialog(Dialog::new(
                 "Settings PIN",

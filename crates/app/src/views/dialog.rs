@@ -26,6 +26,10 @@ pub enum Action {
     OpenSettings,
     SetPin,
     RemovePin,
+    /// Start (true) or stop the SSH server.
+    SetSsh(bool),
+    /// Stop CableBox and show a login prompt on the TV.
+    ExitToConsole,
 }
 
 /// What a PIN prompt is for.
@@ -138,6 +142,8 @@ impl App {
                 | Action::DeleteAutorec(_)
                 | Action::Reboot
                 | Action::PowerOff
+                | Action::SetSsh(_)
+                | Action::ExitToConsole
         );
         // Inside Settings the PIN was already entered once.
         let unlocked = self.settings_unlocked && self.screen == Screen::Menu;
@@ -257,6 +263,8 @@ impl App {
                 self.save_config_now();
                 self.toast("Settings PIN removed");
             }
+            Action::SetSsh(on) => self.set_ssh(on),
+            Action::ExitToConsole => self.exit_to_console(),
         }
     }
 

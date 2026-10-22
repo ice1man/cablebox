@@ -141,6 +141,17 @@ Display: `Settings → Display → Resolution` picks a connector mode (applied t
 - **Settings PIN** (Settings → System): protects Settings, installing updates, reboot/power off,
   and cancelling or deleting recordings. Five wrong tries lock it for 60 s. Forgot it? Delete the
   `pin = ...` line from `/var/lib/cablebox/.config/cablebox/config.toml` over SSH.
+- **Getting out of the TV interface** (Settings → System, behind the PIN):
+  - **Remote access (SSH):** starts or stops `ssh.service` (install `openssh-server` first) and
+    remembers the choice across reboots. The row shows the address to `ssh` to. Anyone on the
+    network can try to log in, so use SSH keys or strong passwords.
+  - **Exit to console:** stops CableBox and shows a login prompt on the TV. Log in with a USB
+    keyboard; `sudo systemctl start cablebox` or a reboot brings the TV back.
+  - **Locked out entirely** (no network, no remote): add `systemd.mask=cablebox.service` to the
+    kernel command line (Pi: end of `cmdline.txt` on the SD card's boot partition; x86: press `e`
+    in the boot menu) to boot to a normal login. Remove it afterwards.
+  The polkit rule allows the `cablebox` user exactly these: start/stop `ssh.service` and start
+  `getty@tty1.service`.
 - **Sandbox:** `cablebox.service` runs with systemd hardening (`systemd-analyze security`
   exposure 1.8). The `cablebox` user still needs the `input` group so it can read remotes.
 - **Untrusted input limits:** API replies are capped at 64 MiB, logos at 2 MiB and 4096×4096

@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use sysctl::services::{self, State};
 use sysctl::updates::{Restart, Update};
 
 use crate::app::{post, App};
@@ -264,6 +265,90 @@ impl App {
                 Err(e) => format!("Failed: {e}"),
             };
             a.render();
+        });
+    }
+
+    // ------------------------------------------------------------ remote access / console
+
+    pub fn refresh_ssh(&mut self) {
+        self.spawn(services::state(services::SSH), |a, r| {
+            match r {
+                Ok(st) => a.menu.ssh = Some(st),
+                Err(e) => tracing::warn!("ssh state: {e}"),
+            }
+            a.render();
+        });
+        // The SSH row shows the box's address.
+        if self.menu.net.is_none() {
+            self.refresh_network();
+        }
+    }
+
+    /// "On · ssh 192.168.1.20" (or just "On" while the address is unknown).
+    pub fn ssh_address(&self) -> String {
+        match self.menu.net.as_ref().map(|n| n.address.as_str()).filter(|a| !a.is_empty()) {
+            Some(ip) => format!("On · ssh {ip}"),
+            None => "On".into(),
+        }
+    }
+
+    pub fn set_ssh(&mut self, on: bool) {
+        let fut = async move {
+            if on {
+                services::start(services::SSH).await?;
+            } else {
+                services::stop(services::SSH).await?;
+            }
+            services::state(services::SSH).await
+        };
+        self.spawn(fut, move |a, r| {
+            match r {
+                Ok(st) => {
+                    a.menu.ssh = Some(st);
+                    a.cfg.remote.ssh = Some(on);
+                    a.save_config_now();
+                    a.toast(if on { "Remote access on" } else { "Remote access off" });
+                }
+                Err(e) => a.show_dialog(Dialog::new("Couldn't change remote access", e.to_string(), vec![("OK", Action::Close)])),
+            }
+            a.render();
+        });
+    }
+
+    /// Re-applies the SSH choice from Settings at startup (only as the real system service).
+    pub fn apply_ssh_preference(&mut self) {
+        let Some(on) = self.cfg.remote.ssh else { return };
+        if !services::running_as_unit("cablebox.service") {
+            return;
+        }
+        self.spawn(
+            async move {
+                match services::state(services::SSH).await? {
+                    State::NotInstalled => Ok(()),
+                    State::Running if !on => services::stop(services::SSH).await,
+                    State::Stopped if on => services::start(services::SSH).await,
+                    _ => Ok(()),
+                }
+            },
+            |_, r| {
+                if let Err(e) = r {
+                    tracing::warn!("applying remote access setting: {e}");
+                }
+            },
+        );
+    }
+
+    /// Starts the tty1 login prompt; systemd then stops CableBox (`Conflicts=`).
+    pub fn exit_to_console(&mut self) {
+        self.save_config_now();
+        self.show_dialog(Dialog::busy("Exiting to console…", ""));
+        self.spawn(services::start(services::CONSOLE), |a, r| {
+            // On success systemd stops this process; we only get here on failure.
+            if let Err(e) = r {
+                a.dialog = None;
+                a.show_dialog(Dialog::new("Couldn't exit to console", e.to_string(), vec![("OK", Action::Close)]));
+                a.render();
+            }
         });
     }
 }

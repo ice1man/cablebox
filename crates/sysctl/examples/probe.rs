@@ -16,4 +16,11 @@ async fn main() {
         Err(e) => println!("updates: error: {e}"),
     }
     println!("reboot required: {}", sysctl::power::reboot_required());
+    for unit in [sysctl::services::SSH, sysctl::services::CONSOLE, "cablebox.service"] {
+        match sysctl::services::state(unit).await {
+            Ok(s) => println!("{unit}: {s:?}"),
+            Err(e) => println!("{unit}: error: {e}"),
+        }
+    }
+    println!("running as cablebox.service: {}", sysctl::services::running_as_unit("cablebox.service"));
 }
