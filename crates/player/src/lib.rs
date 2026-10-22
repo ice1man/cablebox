@@ -64,11 +64,20 @@ impl Player {
             init.set_property("keep-open", "no")?;
             init.set_property("input-default-bindings", false)?;
             init.set_property("ytdl", false)?;
+            // Lockdown: no user config or scripts, and ffmpeg may only open network
+            // protocols (a hostile stream can't redirect playback to local files).
+            init.set_property("config", false)?;
+            init.set_property("load-scripts", false)?;
+            let protocols = "http,https,tcp,tls,httpproxy";
+            // `%N%` quotes a value containing commas in mpv's key=value list syntax.
+            init.set_property("stream-lavf-o", format!("protocol_whitelist=%{}%{protocols}", protocols.len()))?;
             Ok(())
         })?;
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
 
-        let events = mpv.create_client(Some("cablebox-events"))?;
+        // No name: libmpv2 6.0's named path passes mpv a pointer to an already-freed
+        // CString (use-after-free). With `None` it passes NULL and mpv picks a name.
+        let events = mpv.create_client(None)?;
         events.disable_deprecated_events()?;
         events.observe_property("pause", Format::Flag, PROP_PAUSE)?;
         events.observe_property("time-pos", Format::Double, PROP_TIME_POS)?;
