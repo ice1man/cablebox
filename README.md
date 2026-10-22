@@ -85,11 +85,17 @@ Tests: `cargo test --workspace`. The read-only D-Bus probe is `cargo run -p sysc
 
 ```sh
 cargo install cargo-deb
-cargo deb -p cablebox                       # builds with --features kms
-# cross-compile for a Pi: cargo deb -p cablebox --target aarch64-unknown-linux-gnu
+cargo deb -p cablebox                       # amd64, builds with --features kms
+tools/build-arm64.sh                        # arm64 for the Pi, cross-compiled (see below)
 sudo apt install ./target/debian/cablebox_*.deb
 sudo systemctl enable --now cablebox cablebox-cec
 ```
+
+The arm64 build needs `gcc-aarch64-linux-gnu` and `rustup target add aarch64-unknown-linux-gnu`.
+It doesn't need root or a multiarch setup: `tools/arm64-sysroot.sh` downloads the five libraries
+CableBox links against from Debian trixie, verifying the archive signature and every hash, into
+`target/arm64-sysroot`. The result needs glibc 2.39+, so the target must be **Raspberry Pi OS
+based on trixie** (or Debian 13 arm64). Bookworm-based images won't work.
 
 The package creates a `cablebox` system user (groups video, render, input, audio), installs
 the units and a polkit rule that lets that user install updates, manage Wi-Fi and reboot

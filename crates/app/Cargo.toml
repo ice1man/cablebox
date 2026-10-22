@@ -49,3 +49,9 @@ assets = [
     ["../../packaging/50-cablebox.rules", "usr/share/polkit-1/rules.d/", "644"],
     ["../../README.md", "usr/share/doc/cablebox/", "644"],
 ]
+
+# Cross builds can't run dpkg-shlibdeps against the target's libraries, so list them
+# (same as what $auto finds on amd64). Used by tools/build-arm64.sh.
+[package.metadata.deb.variants.arm64]
+name = "cablebox"
+depends = "libc6 (>= 2.39), libgbm1 (>= 17.1.0~rc2), libinput10 (>= 1.7.2), libmpv2 (>= 0.29), libudev1 (>= 183), libxkbcommon0 (>= 0.5.0), packagekit, network-manager, polkitd | policykit-1, adduser"
