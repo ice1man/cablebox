@@ -41,6 +41,11 @@ impl Default for Server {
 }
 
 impl Server {
+    /// Basic auth over plain HTTP sends the password readable to anyone on the network.
+    pub fn sends_cleartext_password(&self) -> bool {
+        self.auth == AuthMode::Basic && !self.user.is_empty() && self.url.trim().to_ascii_lowercase().starts_with("http://")
+    }
+
     pub fn tvh_auth(&self) -> tvh::Auth {
         let (user, pass) = (self.user.clone(), self.pass.clone());
         match self.auth {
@@ -60,6 +65,9 @@ pub struct Ui {
     /// `all`, `favorites` or `tag:<uuid>`.
     pub filter: String,
     pub volume: Option<i64>,
+    /// 4-digit PIN protecting Settings, updates and deleting recordings. Remove this line to reset it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,6 +174,17 @@ mod tests {
         c.server.auth = AuthMode::Basic;
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
         assert_eq!(back, c);
+    }
+
+    #[test]
+    fn cleartext_password_detection() {
+        let mut s = Server { url: "http://tv:9981".into(), auth: AuthMode::Basic, user: "u".into(), ..Default::default() };
+        assert!(s.sends_cleartext_password());
+        s.auth = AuthMode::Digest;
+        assert!(!s.sends_cleartext_password());
+        s.auth = AuthMode::Basic;
+        s.url = "https://tv.example".into();
+        assert!(!s.sends_cleartext_password());
     }
 
     #[test]

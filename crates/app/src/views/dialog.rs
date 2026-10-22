@@ -3,8 +3,11 @@
 use input::RemoteKey;
 use tvh::EpgEvent;
 
+use std::time::Instant;
+
 use crate::app::{fmt_range, model, App};
-use crate::AppWindow;
+use crate::pin::{self, Check};
+use crate::{AppWindow, Screen};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -20,6 +23,26 @@ pub enum Action {
     Reboot,
     PowerOff,
     RestartApp,
+    OpenSettings,
+    SetPin,
+    RemovePin,
+}
+
+/// What a PIN prompt is for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PinPurpose {
+    /// Check the PIN, then run this action.
+    Unlock(Box<Action>),
+    /// Choosing a new PIN: first entry…
+    New,
+    /// …then typing it again.
+    Confirm(String),
+}
+
+pub struct PinPrompt {
+    pub entered: String,
+    pub purpose: PinPurpose,
+    pub error: String,
 }
 
 pub struct Dialog {
@@ -29,6 +52,8 @@ pub struct Dialog {
     pub selected: usize,
     /// 0–1 while something runs; buttons are hidden and Back is ignored.
     pub progress: Option<f32>,
+    /// Set when this dialog is a PIN prompt (digits typed with the remote).
+    pub pin: Option<PinPrompt>,
 }
 
 impl Dialog {
@@ -39,7 +64,27 @@ impl Dialog {
             buttons: buttons.into_iter().map(|(l, a)| (l.to_string(), a)).collect(),
             selected: 0,
             progress: None,
+            pin: None,
         }
+    }
+
+    fn pin(purpose: PinPurpose) -> Self {
+        let mut d = Self::new("", "", vec![]);
+        d.pin = Some(PinPrompt { entered: String::new(), purpose, error: String::new() });
+        d.sync_pin();
+        d
+    }
+
+    /// Updates the title and body from the PIN prompt's state.
+    fn sync_pin(&mut self) {
+        let Some(p) = &self.pin else { return };
+        self.title = match p.purpose {
+            PinPurpose::Unlock(_) => "Enter PIN",
+            PinPurpose::New => "Choose a 4-digit PIN",
+            PinPurpose::Confirm(_) => "Enter the new PIN again",
+        }
+        .into();
+        self.body = format!("{}\n\n{}", pin::mask(&p.entered), p.error);
     }
 
     pub fn busy(title: impl Into<String>, body: impl Into<String>) -> Self {
@@ -53,6 +98,10 @@ impl App {
     }
 
     pub fn dialog_key(&mut self, k: RemoteKey) {
+        if self.dialog.as_ref().is_some_and(|d| d.pin.is_some()) {
+            self.pin_key(k);
+            return;
+        }
         let Some(d) = &mut self.dialog else { return };
         if d.progress.is_some() && d.buttons.is_empty() {
             return; // busy: wait for completion
@@ -78,7 +127,99 @@ impl App {
         }
     }
 
+    /// Actions that need the settings PIN (when one is set).
+    fn needs_pin(&self, action: &Action) -> bool {
+        let gated = matches!(
+            action,
+            Action::OpenSettings
+                | Action::InstallUpdates
+                | Action::CancelDvr(_)
+                | Action::RemoveRecording(_)
+                | Action::DeleteAutorec(_)
+                | Action::Reboot
+                | Action::PowerOff
+        );
+        // Inside Settings the PIN was already entered once.
+        let unlocked = self.settings_unlocked && self.screen == Screen::Menu;
+        gated && self.cfg.ui.pin.is_some() && !unlocked
+    }
+
+    /// Runs an action, asking for the PIN first if it's protected.
     pub fn run_action(&mut self, action: Action) {
+        if self.needs_pin(&action) {
+            self.ask_pin(PinPurpose::Unlock(Box::new(action)));
+        } else {
+            self.perform(action);
+        }
+    }
+
+    pub fn ask_pin(&mut self, purpose: PinPurpose) {
+        let mut d = Dialog::pin(purpose);
+        if let Some(left) = self.pin_gate.locked(Instant::now()) {
+            d.pin.as_mut().unwrap().error = format!("Too many attempts. Try again in {} s.", left.as_secs() + 1);
+            d.sync_pin();
+        }
+        self.show_dialog(d);
+    }
+
+    fn pin_key(&mut self, k: RemoteKey) {
+        let Some(d) = &mut self.dialog else { return };
+        let Some(p) = &mut d.pin else { return };
+        match k {
+            RemoteKey::Digit(n) if p.entered.len() < pin::LEN => {
+                p.entered.push(char::from(b'0' + n));
+                p.error.clear();
+            }
+            RemoteKey::Back if !p.entered.is_empty() => {
+                p.entered.pop();
+            }
+            RemoteKey::Back | RemoteKey::Exit => {
+                self.dialog = None;
+                return;
+            }
+            _ => return,
+        }
+        if p.entered.len() < pin::LEN {
+            d.sync_pin();
+            return;
+        }
+
+        let entered = std::mem::take(&mut p.entered);
+        match p.purpose.clone() {
+            PinPurpose::Unlock(action) => {
+                let expected = self.cfg.ui.pin.clone().unwrap_or_default();
+                match self.pin_gate.check(&expected, &entered, Instant::now()) {
+                    Check::Ok => {
+                        self.dialog = None;
+                        self.perform(*action);
+                        return;
+                    }
+                    Check::Wrong { remaining } => {
+                        let tries = if remaining == 1 { "try" } else { "tries" };
+                        p.error = format!("Wrong PIN. {remaining} {tries} left.");
+                    }
+                    Check::Locked(left) => {
+                        p.error = format!("Too many attempts. Try again in {} s.", left.as_secs());
+                    }
+                }
+            }
+            PinPurpose::New => p.purpose = PinPurpose::Confirm(entered),
+            PinPurpose::Confirm(first) if first == entered => {
+                self.dialog = None;
+                self.cfg.ui.pin = Some(first);
+                self.save_config_now();
+                self.toast("Settings PIN set");
+                return;
+            }
+            PinPurpose::Confirm(_) => {
+                p.purpose = PinPurpose::New;
+                p.error = "The PINs didn't match. Start again.".into();
+            }
+        }
+        d.sync_pin();
+    }
+
+    fn perform(&mut self, action: Action) {
         match action {
             Action::Close => {}
             Action::RecordOnce(id) => self.record(id, false),
@@ -105,6 +246,16 @@ impl App {
                 self.save_config_now();
                 // systemd (Restart=always) brings us back up.
                 std::process::exit(0);
+            }
+            Action::OpenSettings => {
+                self.settings_unlocked = true;
+                self.open_settings();
+            }
+            Action::SetPin => self.ask_pin(PinPurpose::New),
+            Action::RemovePin => {
+                self.cfg.ui.pin = None;
+                self.save_config_now();
+                self.toast("Settings PIN removed");
             }
         }
     }

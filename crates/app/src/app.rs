@@ -124,6 +124,9 @@ pub struct App {
     pub osk: Option<Osk>,
     pub dialog: Option<Dialog>,
     pub updates: UpdateState,
+    /// The settings PIN was entered; cleared when leaving Settings.
+    pub settings_unlocked: bool,
+    pub pin_gate: crate::pin::PinGate,
 }
 
 impl App {
@@ -164,11 +167,17 @@ impl App {
             osk: None,
             dialog: None,
             updates: UpdateState::new(first_check),
+            settings_unlocked: false,
+            pin_gate: Default::default(),
         }
     }
 
     /// First call after install: connect, or run first-time setup.
     pub fn start(&mut self) {
+        if self.cfg.ui.pin.as_deref().is_some_and(|p| !crate::pin::is_valid(p)) {
+            tracing::warn!("ignoring invalid settings PIN in config (must be 4 digits)");
+            self.cfg.ui.pin = None;
+        }
         if let Some(v) = self.cfg.ui.volume {
             let _ = self.player.set_volume(v);
         }
@@ -583,7 +592,7 @@ impl App {
                     self.open_dvr();
                 }
             }
-            RemoteKey::Menu if self.screen != Screen::Menu => self.open_settings(),
+            RemoteKey::Menu if self.screen != Screen::Menu => self.run_action(crate::views::dialog::Action::OpenSettings),
             RemoteKey::Exit if configured => self.go_live(),
             RemoteKey::VolumeUp | RemoteKey::VolumeDown => {
                 let v = self.player.volume() + if k == RemoteKey::VolumeUp { 5 } else { -5 };
@@ -604,6 +613,7 @@ impl App {
 
     pub fn go_live(&mut self) {
         self.entry.cancel();
+        self.settings_unlocked = false;
         self.screen = Screen::Live;
         self.apply_video_rect();
     }
@@ -797,9 +807,16 @@ impl App {
     }
 }
 
-/// Decodes and shrinks a channel logo to at most 128x64.
+/// Decodes and shrinks a channel logo to at most 128x64. Oversized images are rejected
+/// before allocation so a hostile server can't exhaust memory.
 fn decode_logo(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    let img = image::load_from_memory(bytes).ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 << 20);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
     let img = img.resize(128, 64, image::imageops::FilterType::Triangle).to_rgba8();
     Some(SharedPixelBuffer::clone_from_slice(img.as_raw(), img.width(), img.height()))
 }
@@ -807,4 +824,29 @@ fn decode_logo(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
 /// Shorthand for building Slint list models.
 pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(v))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_logo;
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbaImage::new(w, h)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn logos_are_decoded_and_shrunk() {
+        let buf = decode_logo(&png(256, 128)).unwrap();
+        assert_eq!((buf.width(), buf.height()), (128, 64));
+    }
+
+    #[test]
+    fn huge_logos_are_rejected() {
+        assert!(decode_logo(&png(5000, 10)).is_none());
+        assert!(decode_logo(b"not an image").is_none());
+    }
 }

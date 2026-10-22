@@ -8,6 +8,7 @@ mod config;
 mod entry;
 mod guide;
 mod lineup;
+mod pin;
 mod views;
 
 use std::cell::{Cell, RefCell};

@@ -43,6 +43,7 @@ enum Act {
     ScanWifi,
     JoinWifi(usize),
     CheckUpdates,
+    Pin,
     Do(Action),
     None,
 }
@@ -156,6 +157,7 @@ impl App {
                 Item::new("Server address", if c.server.url.is_empty() { "http://…:9981" } else { &c.server.url }, Act::Edit(Field::Url)),
                 Item::new("Login", match c.server.auth {
                     AuthMode::None => "None",
+                    AuthMode::Basic if c.server.url.starts_with("http://") => "Basic (unencrypted!)",
                     AuthMode::Basic => "Basic",
                     AuthMode::Digest => "Digest",
                 }, Act::Cycle(Field::Auth)),
@@ -234,6 +236,7 @@ impl App {
                 Item::info("Version", env!("CARGO_PKG_VERSION")),
                 Item::new("Check for updates", self.updates.summary(), Act::CheckUpdates),
                 Item::new("Automatic update checks", on_off(c.updates.auto_check), Act::Cycle(Field::AutoUpdate)),
+                Item::new("Settings PIN", on_off(c.ui.pin.is_some()), Act::Pin),
                 Item::new("Restart CableBox", "", Act::Do(Action::RestartApp)),
                 Item::new("Reboot", "", Act::Do(Action::Reboot)),
                 Item::new("Power off", "", Act::Do(Action::PowerOff)),
@@ -323,6 +326,12 @@ impl App {
                 }
             }
             Act::CheckUpdates => self.check_updates(true),
+            Act::Pin if self.cfg.ui.pin.is_none() => self.run_action(Action::SetPin),
+            Act::Pin => self.show_dialog(Dialog::new(
+                "Settings PIN",
+                "The PIN protects Settings, system updates, rebooting and deleting recordings.",
+                vec![("Change PIN", Action::SetPin), ("Remove PIN", Action::RemovePin), ("Cancel", Action::Close)],
+            )),
             Act::Do(a @ (Action::Reboot | Action::PowerOff | Action::RestartApp)) => {
                 let (title, label) = match a {
                     Action::Reboot => ("Reboot the box?", "Reboot"),

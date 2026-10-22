@@ -253,8 +253,12 @@ impl App {
             let n = client.channels().await?.len();
             Ok::<_, tvh::Error>((info, n))
         };
-        self.spawn(fut, |a, r| {
+        let cleartext = self.cfg.server.sends_cleartext_password();
+        self.spawn(fut, move |a, r| {
             a.menu.server_info = match r {
+                Ok((_, n)) if cleartext => {
+                    format!("OK · {n} channels · use Digest: password is sent unencrypted")
+                }
                 Ok((info, n)) => format!("OK · Tvheadend {} · {n} channels", info.sw_version),
                 Err(tvh::Error::Unauthorized) => "Login failed".into(),
                 Err(e) => format!("Failed: {e}"),

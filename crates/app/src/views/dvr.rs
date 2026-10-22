@@ -39,7 +39,7 @@ impl App {
     /// Newest recordings first; upcoming soonest first.
     fn finished_sorted(&self) -> Vec<&tvh::DvrEntry> {
         let mut v: Vec<_> = self.dvr_finished.iter().collect();
-        v.sort_by(|a, b| b.start.cmp(&a.start));
+        v.sort_by_key(|e| std::cmp::Reverse(e.start));
         v
     }
 
