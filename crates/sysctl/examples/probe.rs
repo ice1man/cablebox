@@ -1,0 +1,19 @@
+//! Read-only check of the D-Bus integrations: `cargo run -p sysctl --example probe`.
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    match sysctl::network::status().await {
+        Ok(s) => println!("network: {s:?}"),
+        Err(e) => println!("network: error: {e}"),
+    }
+    match sysctl::updates::check(false).await {
+        Ok(u) => {
+            println!("updates: {} pending", u.len());
+            for p in u.iter().take(10) {
+                println!("  {} {}{}", p.name, p.version, if p.important { " (important)" } else { "" });
+            }
+        }
+        Err(e) => println!("updates: error: {e}"),
+    }
+    println!("reboot required: {}", sysctl::power::reboot_required());
+}

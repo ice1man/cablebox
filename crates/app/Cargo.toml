@@ -1,0 +1,51 @@
+[package]
+name = "cablebox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Retro cable-box shell for Tvheadend"
+
+[dependencies]
+tvh = { path = "../tvh" }
+player = { path = "../player" }
+slint = { version = "=1.14.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg"] }
+anyhow.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+input = { path = "../input" }
+sysctl = { path = "../sysctl" }
+toml = "0.8"
+directories = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[build-dependencies]
+slint-build = "=1.14.1"
+
+[features]
+# Render straight to KMS/DRM with libinput (production session). Needs libinput-dev, libgbm-dev, libudev-dev.
+kms = ["slint/backend-linuxkms-noseat"]
+
+[package.metadata.deb]
+name = "cablebox"
+maintainer = "ice <ice@icecubelabs.xyz>"
+section = "video"
+priority = "optional"
+features = ["kms"]
+depends = "$auto, packagekit, network-manager, polkitd | policykit-1, adduser"
+recommends = "v4l-utils, fonts-dejavu-core"
+extended-description = """\
+Boots straight into a full-screen, remote-controlled TV interface styled like a classic \
+cable box: live TV with channel-number entry, a grid guide, DVR recordings and \
+favorites from a Tvheadend server, plus on-screen Wi-Fi setup and system updates."""
+maintainer-scripts = "../../packaging/debian/"
+assets = [
+    ["target/release/cablebox", "usr/bin/", "755"],
+    ["../../packaging/cablebox.service", "usr/lib/systemd/system/", "644"],
+    ["../../packaging/cablebox-cec.service", "usr/lib/systemd/system/", "644"],
+    ["../../packaging/50-cablebox.rules", "usr/share/polkit-1/rules.d/", "644"],
+    ["../../README.md", "usr/share/doc/cablebox/", "644"],
+]

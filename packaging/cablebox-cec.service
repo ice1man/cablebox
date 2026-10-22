@@ -1,0 +1,15 @@
+# Registers the box as an HDMI-CEC playback device so the TV forwards its remote's
+# buttons. The kernel then exposes them as an input device that CableBox reads.
+# (Pulse-Eight USB adapters: run `inputattach --pulse8-cec /dev/ttyACM0` first.)
+[Unit]
+Description=HDMI-CEC setup for CableBox
+ConditionPathExists=/dev/cec0
+Before=cablebox.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/cec-ctl --device=/dev/cec0 --playback --osd-name=CableBox
+
+[Install]
+WantedBy=cablebox.service

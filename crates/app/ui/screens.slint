@@ -1,0 +1,361 @@
+import { Theme } from "theme.slint";
+import { DvrItem, MenuItem } from "types.slint";
+import { KeyLegend } from "guide.slint";
+
+component Header inherits Rectangle {
+    in property <string> title;
+    in property <string> clock;
+    height: 56px;
+    border-radius: Theme.radius;
+    background: Theme.panel;
+    border-width: 2px;
+    border-color: Theme.border;
+    HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 18px;
+        Text {
+            text: root.title;
+            color: Theme.focus;
+            font-size: 28px;
+            font-weight: 900;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.clock;
+            color: Theme.text;
+            font-size: 20px;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component DvrPage inherits Rectangle {
+    in property <int> tab;
+    in property <[DvrItem]> items;
+    in property <string> detail;
+    in property <string> empty-text;
+    in property <string> clock;
+    property <[string]> tabs: ["Upcoming", "Recorded", "Series"];
+    background: Theme.panel-dark;
+
+    VerticalLayout {
+        padding-left: Theme.safe-x;
+        padding-right: Theme.safe-x;
+        padding-top: Theme.safe-y;
+        padding-bottom: Theme.safe-y;
+        spacing: 10px;
+
+        Header { title: "RECORDINGS"; clock: root.clock; }
+
+        HorizontalLayout {
+            height: 36px;
+            spacing: 8px;
+            alignment: start;
+            for t[i] in root.tabs: Rectangle {
+                width: 170px;
+                border-radius: 4px;
+                background: i == root.tab ? Theme.focus : Theme.row;
+                Text {
+                    text: t;
+                    color: i == root.tab ? Theme.focus-text : Theme.text;
+                    font-size: 18px;
+                    font-weight: 800;
+                }
+            }
+            Text {
+                text: "◀ ▶ switch";
+                color: Theme.text-dim;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: Theme.radius;
+            background: Theme.row-alt;
+            if root.items.length == 0: Text {
+                text: root.empty-text;
+                color: Theme.text-dim;
+                font-size: 22px;
+            }
+            VerticalLayout {
+                padding: 8px;
+                spacing: 4px;
+                alignment: start;
+                for it in root.items: Rectangle {
+                    height: 46px;
+                    border-radius: 4px;
+                    background: it.selected ? Theme.focus : Theme.row;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 14px;
+                        if it.recording: Text {
+                            text: "●";
+                            color: Theme.rec;
+                            font-size: 18px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: it.title;
+                            color: it.selected ? Theme.focus-text : Theme.text;
+                            font-size: 18px;
+                            font-weight: 800;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 2;
+                        }
+                        Text {
+                            text: it.subtitle;
+                            color: it.selected ? Theme.focus-text : Theme.text-dim;
+                            font-size: 15px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 2;
+                        }
+                        Text {
+                            text: it.channel;
+                            color: it.selected ? Theme.focus-text : Theme.text-dim;
+                            font-size: 15px;
+                            vertical-alignment: center;
+                            width: 150px;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: it.when;
+                            color: it.selected ? Theme.focus-text : Theme.text;
+                            font-size: 15px;
+                            vertical-alignment: center;
+                            width: 210px;
+                        }
+                        Text {
+                            text: it.status;
+                            color: it.selected ? Theme.focus-text : Theme.text-dim;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                            width: 110px;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 70px;
+            border-radius: Theme.radius;
+            background: Theme.panel;
+            Text {
+                x: 14px;
+                width: parent.width - 28px;
+                text: root.detail;
+                color: Theme.text;
+                font-size: 15px;
+                font-weight: 400;
+                wrap: word-wrap;
+                overflow: elide;
+                horizontal-alignment: left;
+            }
+        }
+
+        HorizontalLayout {
+            height: 24px;
+            spacing: 22px;
+            KeyLegend { color: Theme.focus; text: "OK  Play / Options"; }
+            KeyLegend { color: Theme.key-red; text: "Delete / Cancel"; }
+            KeyLegend { color: Theme.text-dim; text: "Back  Exit"; }
+        }
+    }
+}
+
+// Generic list screen used for Settings and the first-run setup.
+export component MenuPage inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    in property <[MenuItem]> items;
+    in property <string> clock;
+    background: Theme.panel-dark;
+
+    VerticalLayout {
+        padding-left: Theme.safe-x + 120px;
+        padding-right: Theme.safe-x + 120px;
+        padding-top: Theme.safe-y;
+        padding-bottom: Theme.safe-y;
+        spacing: 12px;
+
+        Header { title: root.title; clock: root.clock; }
+
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: Theme.radius;
+            background: Theme.row-alt;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 5px;
+                alignment: start;
+                for it in root.items: Rectangle {
+                    height: 48px;
+                    border-radius: 4px;
+                    background: it.selected ? Theme.focus : Theme.row;
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        Text {
+                            text: it.label;
+                            color: it.selected ? Theme.focus-text : it.disabled ? Theme.text-dim : Theme.text;
+                            font-size: 20px;
+                            font-weight: 800;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: it.value;
+                            color: it.selected ? Theme.focus-text : Theme.text-dim;
+                            font-size: 18px;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: root.hint;
+            color: Theme.text-dim;
+            font-size: 15px;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// Modal dialog with buttons and an optional progress bar (progress < 0 hides it).
+export component Dialog inherits Rectangle {
+    in property <string> title;
+    in property <string> body;
+    in property <[string]> buttons;
+    in property <int> selected;
+    in property <float> progress: -1;
+    width: 620px;
+    height: layout.preferred-height;
+    border-radius: Theme.radius + 2px;
+    border-width: 3px;
+    border-color: Theme.focus;
+    background: Theme.panel;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #000000c0;
+
+    layout := VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        Text {
+            text: root.title;
+            color: Theme.focus;
+            font-size: 26px;
+            font-weight: 900;
+        }
+        Text {
+            text: root.body;
+            color: Theme.text;
+            font-size: 18px;
+            font-weight: 400;
+            wrap: word-wrap;
+        }
+        if root.progress >= 0: Rectangle {
+            height: 16px;
+            border-radius: 8px;
+            background: Theme.panel-dark;
+            border-width: 1px;
+            border-color: Theme.border;
+            Rectangle {
+                x: 0;
+                width: parent.width * clamp(root.progress, 0, 1);
+                border-radius: 8px;
+                background: Theme.focus;
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+            for b[i] in root.buttons: Rectangle {
+                width: max(130px, bl.preferred-width + 30px);
+                height: 42px;
+                border-radius: 4px;
+                background: i == root.selected ? Theme.focus : Theme.row;
+                border-width: 2px;
+                border-color: i == root.selected ? Theme.focus : Theme.border;
+                bl := Text {
+                    text: b;
+                    color: i == root.selected ? Theme.focus-text : Theme.text;
+                    font-size: 18px;
+                    font-weight: 800;
+                }
+            }
+        }
+    }
+}
+
+// On-screen keyboard driven by arrow keys. `keys` is a flat grid of `columns` per row.
+// `value` arrives already masked for passwords.
+export component Keyboard inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <[string]> keys;
+    in property <int> columns: 10;
+    in property <int> selected;
+    property <length> key-w: 64px;
+    property <length> key-h: 46px;
+    width: root.columns * (self.key-w + 6px) + 34px;
+    height: 120px + ceil(root.keys.length / root.columns) * (self.key-h + 6px);
+    border-radius: Theme.radius + 2px;
+    border-width: 3px;
+    border-color: Theme.focus;
+    background: Theme.panel;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #000000c0;
+
+    Text {
+        x: 20px;
+        y: 14px;
+        text: root.label;
+        color: Theme.focus;
+        font-size: 20px;
+        font-weight: 900;
+    }
+    Rectangle {
+        x: 20px;
+        y: 46px;
+        width: parent.width - 40px;
+        height: 44px;
+        border-radius: 4px;
+        background: Theme.panel-dark;
+        border-width: 2px;
+        border-color: Theme.border;
+        Text {
+            x: 12px;
+            text: root.value + "▏";
+            color: Theme.text;
+            font-size: 20px;
+            font-weight: 400;
+        }
+    }
+    for k[i] in root.keys: Rectangle {
+        x: 20px + mod(i, root.columns) * (root.key-w + 6px);
+        y: 104px + floor(i / root.columns) * (root.key-h + 6px);
+        width: root.key-w;
+        height: root.key-h;
+        border-radius: 4px;
+        background: i == root.selected ? Theme.focus : Theme.row;
+        Text {
+            text: k;
+            color: i == root.selected ? Theme.focus-text : Theme.text;
+            font-size: k.character-count > 1 ? 13px : 20px;
+            font-weight: 800;
+        }
+    }
+}

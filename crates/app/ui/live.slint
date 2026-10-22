@@ -1,0 +1,251 @@
+import { Theme } from "theme.slint";
+import { BannerData } from "types.slint";
+
+component Pill inherits Rectangle {
+    in property <string> text;
+    in property <color> fill;
+    height: 22px;
+    width: label.preferred-width + 16px;
+    border-radius: 4px;
+    background: self.fill;
+    label := Text {
+        text: root.text;
+        color: white;
+        font-size: 13px;
+        font-weight: 800;
+    }
+}
+
+// Bottom-of-screen info banner shown on channel change and Info.
+export component Banner inherits Rectangle {
+    in property <BannerData> data;
+    in property <string> clock;
+    height: 172px;
+    border-radius: Theme.radius;
+    border-width: 2px;
+    border-color: Theme.border;
+    background: Theme.panel;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #000000a0;
+
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 18px;
+
+        // Channel block
+        VerticalLayout {
+            width: 210px;
+            spacing: 4px;
+            alignment: start;
+            Text {
+                text: root.data.number;
+                color: Theme.focus;
+                font-size: 54px;
+                font-weight: 900;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                if root.data.logo.width > 0: Image {
+                    source: root.data.logo;
+                    height: 32px;
+                    width: 56px;
+                    image-fit: contain;
+                }
+                Text {
+                    text: root.data.name;
+                    color: Theme.text;
+                    font-size: 20px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            if root.data.filter != "": Text {
+                text: root.data.filter;
+                color: Theme.text-dim;
+                font-size: 13px;
+            }
+        }
+
+        Rectangle {
+            width: 2px;
+            background: Theme.border;
+        }
+
+        // Now / next
+        VerticalLayout {
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.data.now-title != "" ? root.data.now-title : "No program information";
+                    color: Theme.text;
+                    font-size: 26px;
+                    font-weight: 800;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.data.recording: Pill {
+                    text: "● REC";
+                    fill: Theme.rec;
+                }
+                if root.data.favorite: Pill {
+                    text: "★ FAV";
+                    fill: #8a6d00;
+                }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                Text {
+                    text: root.data.now-time;
+                    color: Theme.text-dim;
+                    font-size: 16px;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    height: 10px;
+                    y: (parent.height - self.height) / 2;
+                    horizontal-stretch: 1;
+                    border-radius: 5px;
+                    background: Theme.panel-dark;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * clamp(root.data.progress, 0, 1);
+                        border-radius: 5px;
+                        background: Theme.focus;
+                    }
+                }
+            }
+            Rectangle { height: 4px; }
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: "NEXT";
+                    color: Theme.focus;
+                    font-size: 15px;
+                    font-weight: 900;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.data.next-time;
+                    color: Theme.text-dim;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.data.next-title;
+                    color: Theme.text;
+                    font-size: 18px;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        // Clock
+        VerticalLayout {
+            width: 120px;
+            alignment: start;
+            Text {
+                text: root.clock;
+                color: Theme.text;
+                font-size: 24px;
+                font-weight: 800;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+// Classic "1 2 _" channel-number entry box.
+export component ChannelEntry inherits Rectangle {
+    in property <string> text;
+    width: digits.preferred-width + 40px;
+    height: 76px;
+    border-radius: Theme.radius;
+    background: #000000c8;
+    border-width: 2px;
+    border-color: Theme.focus;
+    digits := Text {
+        text: root.text;
+        color: Theme.focus;
+        font-size: 48px;
+        font-weight: 900;
+        letter-spacing: 6px;
+    }
+}
+
+// Centered status message on black ("No Signal", "Tuning…").
+export component VideoStatus inherits Rectangle {
+    in property <string> text;
+    in property <string> clock;
+    background: black;
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px;
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: 40px;
+            font-weight: 900;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.clock;
+            color: Theme.text-dim;
+            font-size: 20px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// Transport bar for recording playback.
+export component PlaybackBar inherits Rectangle {
+    in property <string> title;
+    in property <string> position;
+    in property <float> progress;
+    in property <bool> paused;
+    height: 92px;
+    border-radius: Theme.radius;
+    border-width: 2px;
+    border-color: Theme.border;
+    background: Theme.panel;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: root.paused ? "❚❚" : "▶";
+                color: Theme.focus;
+                font-size: 22px;
+            }
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 22px;
+                font-weight: 800;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.position;
+                color: Theme.text-dim;
+                font-size: 18px;
+            }
+        }
+        Rectangle {
+            height: 10px;
+            border-radius: 5px;
+            background: Theme.panel-dark;
+            Rectangle {
+                x: 0;
+                width: parent.width * clamp(root.progress, 0, 1);
+                border-radius: 5px;
+                background: Theme.focus;
+            }
+        }
+    }
+}

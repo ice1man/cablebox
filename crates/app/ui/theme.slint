@@ -1,0 +1,26 @@
+// Classic set-top-box palette. The UI is laid out on a 1280x720 logical canvas;
+// Rust sets the scale factor so it fills any display.
+export global Theme {
+    out property <color> panel-top: #1d3f96;
+    out property <color> panel-bottom: #0a1d58;
+    out property <brush> panel: @linear-gradient(180deg, self.panel-top 0%, self.panel-bottom 100%);
+    out property <color> panel-dark: #071438;
+    out property <color> row: #0f2668;
+    out property <color> row-alt: #0c205b;
+    out property <color> border: #6b8be0;
+    out property <color> text: #ffffff;
+    out property <color> text-dim: #aebce6;
+    out property <color> focus: #ffd400;
+    out property <color> focus-text: #0a0a0a;
+    out property <color> airing: #2850b0;
+    out property <color> past: #0a1846;
+    out property <color> rec: #e8202a;
+    out property <color> fav: #ffd400;
+    out property <color> key-red: #d62828;
+    out property <color> key-green: #2a9d3a;
+    out property <color> key-yellow: #e6c200;
+    out property <color> key-blue: #2f6fe0;
+    out property <length> safe-x: 48px;
+    out property <length> safe-y: 28px;
+    out property <length> radius: 6px;
+}

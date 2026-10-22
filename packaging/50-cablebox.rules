@@ -1,0 +1,23 @@
+// Lets the `cablebox` session user install OS updates, manage Wi-Fi and reboot
+// without a password prompt (there is no keyboard to type one on a TV).
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "cablebox") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var allowed = [
+        "org.freedesktop.packagekit.system-sources-refresh",
+        "org.freedesktop.packagekit.system-update",
+        "org.freedesktop.login1.reboot",
+        "org.freedesktop.login1.reboot-multiple-sessions",
+        "org.freedesktop.login1.power-off",
+        "org.freedesktop.login1.power-off-multiple-sessions",
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.enable-disable-wifi",
+    ];
+    if (allowed.indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

@@ -1,0 +1,7 @@
+{"entries":[
+ {"uuid":"c1","enabled":true,"autoname":false,"name":"PBS","number":5.1,"icon":"","icon_public_url":"imagecache/7","epgauto":true,"epglimit":0,"dvr_pre_time":0,"dvr_pst_time":0,"epg_running":-1,"services":["s1"],"tags":["t1","t2"],"bouquet":""},
+ {"uuid":"c2","enabled":true,"name":"NBC","number":4,"icon_public_url":"imagecache/8","tags":["t1"]},
+ {"uuid":"c3","enabled":false,"name":"Disabled","number":99,"tags":[]},
+ {"uuid":"c4","enabled":true,"name":"Weather","number":"5.2","tags":[]},
+ {"uuid":"c5","enabled":true,"name":"No Number","tags":[]}
+],"total":5}

@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    if ! getent passwd cablebox >/dev/null; then
+        adduser --system --group --home /var/lib/cablebox --shell /usr/sbin/nologin \
+            --gecos "CableBox TV shell" cablebox
+    fi
+    for g in video render input audio; do
+        if getent group "$g" >/dev/null; then
+            adduser cablebox "$g" >/dev/null 2>&1 || true
+        fi
+    done
+fi
+
+#DEBHELPER#
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    # Upgrades: pick up the new binary if the session is running.
+    if [ "$1" = "configure" ] && [ -n "$2" ] && systemctl is-active --quiet cablebox.service; then
+        echo "CableBox updated; it will restart when you choose Restart in the update dialog."
+    fi
+fi
+
+exit 0

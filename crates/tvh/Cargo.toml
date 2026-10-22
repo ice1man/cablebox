@@ -1,0 +1,22 @@
+[package]
+name = "tvh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+diqwest = "3.2"
+url = "2"
+
+[dev-dependencies]
+tokio.workspace = true
+
+[features]
+# Tvheadend is usually plain HTTP on the LAN; enable for https:// servers.
+tls = ["reqwest/rustls"]

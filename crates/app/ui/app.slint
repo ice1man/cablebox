@@ -1,0 +1,178 @@
+import { Theme } from "theme.slint";
+import { BannerData, GuideRow, GuideDetail, DvrItem, MenuItem, Screen } from "types.slint";
+import { Banner, ChannelEntry, VideoStatus, PlaybackBar } from "live.slint";
+import { GuidePage } from "guide.slint";
+import { DvrPage, MenuPage, Dialog, Keyboard } from "screens.slint";
+
+export { BannerData, GuideRow, GuideCell, GuideDetail, DvrItem, MenuItem, Screen } from "types.slint";
+
+// All state is pushed from Rust; every key goes to Rust through `key()`.
+// Video is rendered by mpv *underneath* this window's contents.
+export component AppWindow inherits Window {
+    title: "CableBox";
+    background: black;
+    preferred-width: 1280px;
+    preferred-height: 720px;
+    default-font-family: "DejaVu Sans";
+    default-font-weight: 700;
+
+    in property <Screen> screen: Screen.live;
+    in property <string> clock;
+
+    // Live TV
+    in property <string> video-status;
+    in property <bool> banner-visible;
+    in property <BannerData> banner;
+    in property <string> entry-text;
+    in property <string> toast;
+    in property <bool> playback-visible;
+    in property <string> playback-title;
+    in property <string> playback-position;
+    in property <float> playback-progress;
+    in property <bool> playback-paused;
+
+    // Guide
+    in property <[GuideRow]> guide-rows;
+    in property <[string]> guide-times;
+    in property <string> guide-date;
+    in property <string> guide-filter;
+    in property <GuideDetail> guide-detail;
+    in property <float> guide-now-x: -1;
+    out property <length> preview-x: guide.preview-x;
+    out property <length> preview-y: guide.preview-y;
+    out property <length> preview-w: guide.preview-w;
+    out property <length> preview-h: guide.preview-h;
+
+    // Recordings
+    in property <int> dvr-tab;
+    in property <[DvrItem]> dvr-items;
+    in property <string> dvr-detail;
+    in property <string> dvr-empty;
+
+    // Menus / settings
+    in property <string> menu-title;
+    in property <string> menu-hint;
+    in property <[MenuItem]> menu-items;
+
+    // On-screen keyboard
+    in property <bool> osk-visible;
+    in property <string> osk-label;
+    in property <string> osk-value;
+    in property <[string]> osk-keys;
+    in property <int> osk-columns: 10;
+    in property <int> osk-selected;
+
+    // Modal dialog
+    in property <bool> dialog-visible;
+    in property <string> dialog-title;
+    in property <string> dialog-body;
+    in property <[string]> dialog-buttons;
+    in property <int> dialog-selected;
+    in property <float> dialog-progress: -1;
+
+    callback key(string) -> bool;
+
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                return reject;
+            }
+            root.key(event.text) ? accept : reject
+        }
+    }
+
+    if root.screen == Screen.live && root.video-status != "": VideoStatus {
+        text: root.video-status;
+        clock: root.clock;
+    }
+
+    if root.screen == Screen.live && root.banner-visible: Banner {
+        x: Theme.safe-x;
+        y: root.height - Theme.safe-y - self.height;
+        width: root.width - Theme.safe-x * 2;
+        data: root.banner;
+        clock: root.clock;
+    }
+
+    if root.screen == Screen.live && root.playback-visible: PlaybackBar {
+        x: Theme.safe-x;
+        y: root.height - Theme.safe-y - self.height;
+        width: root.width - Theme.safe-x * 2;
+        title: root.playback-title;
+        position: root.playback-position;
+        progress: root.playback-progress;
+        paused: root.playback-paused;
+    }
+
+    guide := GuidePage {
+        visible: root.screen == Screen.guide;
+        rows: root.guide-rows;
+        times: root.guide-times;
+        date: root.guide-date;
+        filter: root.guide-filter;
+        detail: root.guide-detail;
+        now-x: root.guide-now-x;
+        clock: root.clock;
+    }
+
+    if root.screen == Screen.dvr: DvrPage {
+        tab: root.dvr-tab;
+        items: root.dvr-items;
+        detail: root.dvr-detail;
+        empty-text: root.dvr-empty;
+        clock: root.clock;
+    }
+
+    if root.screen == Screen.menu: MenuPage {
+        title: root.menu-title;
+        hint: root.menu-hint;
+        items: root.menu-items;
+        clock: root.clock;
+    }
+
+    if root.entry-text != "": ChannelEntry {
+        x: root.width - Theme.safe-x - self.width;
+        y: Theme.safe-y;
+        text: root.entry-text;
+    }
+
+    if root.toast != "": Rectangle {
+        x: (root.width - self.width) / 2;
+        y: Theme.safe-y;
+        width: toast-text.preferred-width + 40px;
+        height: 44px;
+        border-radius: Theme.radius;
+        background: #000000d0;
+        border-width: 2px;
+        border-color: Theme.border;
+        toast-text := Text {
+            text: root.toast;
+            color: Theme.text;
+            font-size: 18px;
+        }
+    }
+
+    if root.osk-visible: Keyboard {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        label: root.osk-label;
+        value: root.osk-value;
+        keys: root.osk-keys;
+        columns: root.osk-columns;
+        selected: root.osk-selected;
+    }
+
+    if root.dialog-visible: Rectangle {
+        background: #00000080;
+        Dialog {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            title: root.dialog-title;
+            body: root.dialog-body;
+            buttons: root.dialog-buttons;
+            selected: root.dialog-selected;
+            progress: root.dialog-progress;
+        }
+    }
+}

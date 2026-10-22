@@ -1,0 +1,810 @@
+//! The controller: owns all state, handles remote keys, and pushes view state to Slint.
+//!
+//! Everything here runs on the UI thread. Async work runs on a Tokio runtime and posts
+//! its result back with [`post`], which re-enters through [`with_app`].
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use chrono::{Local, TimeZone};
+use input::RemoteKey;
+use player::{Player, PlayerEvent};
+use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use tvh::{Channel, ChannelTag, DvrEntry, EpgEvent};
+
+use crate::config::Config;
+use crate::entry::{ChannelEntry, Entry};
+use crate::guide::{EpgCache, GuideNav, BLOCK};
+use crate::lineup::{Filter, Lineup};
+use crate::views::dialog::Dialog;
+use crate::views::dvr::DvrState;
+use crate::views::menu::{MenuState, Osk};
+use crate::views::system::UpdateState;
+use crate::{AppWindow, BannerData, Screen};
+
+const BANNER_TIME: Duration = Duration::from_secs(5);
+const TOAST_TIME: Duration = Duration::from_secs(3);
+const DVR_REFRESH: Duration = Duration::from_secs(60);
+const RECONNECT_DELAY: Duration = Duration::from_secs(10);
+const RETUNE_DELAY: Duration = Duration::from_secs(5);
+const CONFIG_SAVE_DELAY: Duration = Duration::from_secs(3);
+
+thread_local! {
+    static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+}
+
+pub fn install(app: App) {
+    APP.with(|a| *a.borrow_mut() = Some(app));
+}
+
+/// Runs `f` against the controller. Returns `None` if it isn't installed or is already
+/// borrowed (a re-entrant call, which is dropped rather than panicking).
+pub fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
+    APP.with(|a| match a.try_borrow_mut() {
+        Ok(mut g) => g.as_mut().map(f),
+        Err(_) => {
+            tracing::warn!("re-entrant controller access dropped");
+            None
+        }
+    })
+}
+
+/// Schedules `f` on the UI thread from any thread.
+pub fn post(f: impl FnOnce(&mut App) + Send + 'static) {
+    let _ = slint::invoke_from_event_loop(move || {
+        with_app(f);
+    });
+}
+
+pub fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+pub fn fmt_time(t: i64) -> String {
+    Local.timestamp_opt(t, 0).single().map(|d| d.format("%-I:%M %p").to_string()).unwrap_or_default()
+}
+
+pub fn fmt_range(start: i64, stop: i64) -> String {
+    format!("{} – {}", fmt_time(start), fmt_time(stop))
+}
+
+pub fn fmt_day(t: i64) -> String {
+    Local.timestamp_opt(t, 0).single().map(|d| d.format("%a %b %-d").to_string()).unwrap_or_default()
+}
+
+/// A recording being played back instead of live TV.
+pub struct Playback {
+    pub entry: DvrEntry,
+    pub position: f64,
+    pub duration: f64,
+    pub paused: bool,
+}
+
+pub struct App {
+    pub ui: slint::Weak<AppWindow>,
+    pub rt: tokio::runtime::Handle,
+    pub player: Arc<Player>,
+    pub cfg: Config,
+    config_dirty: Option<Instant>,
+
+    pub tvh: Option<tvh::Client>,
+    /// Bumped on reconnect so stale async results are dropped.
+    pub gen: u64,
+    reconnect_at: Option<Instant>,
+
+    pub lineup: Lineup,
+    pub epg: EpgCache,
+    epg_inflight: HashSet<i64>,
+    pub dvr_upcoming: Vec<DvrEntry>,
+    pub dvr_finished: Vec<DvrEntry>,
+    pub autorecs: Vec<tvh::AutorecRule>,
+    dvr_loaded_at: Option<Instant>,
+    pub logos: HashMap<String, Image>,
+
+    pub screen: Screen,
+    pub tuned: Option<String>,
+    previous: Option<String>,
+    pub playback: Option<Playback>,
+    pub video_status: String,
+    retune_at: Option<Instant>,
+
+    pub entry: ChannelEntry,
+    banner_until: Option<Instant>,
+    toast: String,
+    toast_until: Option<Instant>,
+    clock: String,
+    last_prune: i64,
+
+    pub guide: GuideNav,
+    pub dvr: DvrState,
+    pub menu: MenuState,
+    pub osk: Option<Osk>,
+    pub dialog: Option<Dialog>,
+    pub updates: UpdateState,
+}
+
+impl App {
+    pub fn new(ui: &AppWindow, rt: tokio::runtime::Handle, player: Arc<Player>, cfg: Config) -> Self {
+        let first_check = Instant::now() + Duration::from_secs(60);
+        Self {
+            ui: ui.as_weak(),
+            rt,
+            player,
+            cfg,
+            config_dirty: None,
+            tvh: None,
+            gen: 0,
+            reconnect_at: None,
+            lineup: Lineup::default(),
+            epg: EpgCache::default(),
+            epg_inflight: HashSet::new(),
+            dvr_upcoming: Vec::new(),
+            dvr_finished: Vec::new(),
+            autorecs: Vec::new(),
+            dvr_loaded_at: None,
+            logos: HashMap::new(),
+            screen: Screen::Live,
+            tuned: None,
+            previous: None,
+            playback: None,
+            video_status: String::new(),
+            retune_at: None,
+            entry: ChannelEntry::default(),
+            banner_until: None,
+            toast: String::new(),
+            toast_until: None,
+            clock: String::new(),
+            last_prune: 0,
+            guide: GuideNav::default(),
+            dvr: DvrState::default(),
+            menu: MenuState::default(),
+            osk: None,
+            dialog: None,
+            updates: UpdateState::new(first_check),
+        }
+    }
+
+    /// First call after install: connect, or run first-time setup.
+    pub fn start(&mut self) {
+        if let Some(v) = self.cfg.ui.volume {
+            let _ = self.player.set_volume(v);
+        }
+        if self.cfg.is_configured() {
+            self.connect();
+        } else {
+            self.open_setup();
+        }
+        self.render();
+    }
+
+    /// Runs `fut` on the runtime and hands the result to `done` on the UI thread.
+    pub fn spawn<T: Send + 'static>(
+        &self,
+        fut: impl Future<Output = T> + Send + 'static,
+        done: impl FnOnce(&mut App, T) + Send + 'static,
+    ) {
+        self.rt.spawn(async move {
+            let v = fut.await;
+            post(move |a| done(a, v));
+        });
+    }
+
+    /// Like [`spawn`](Self::spawn) but drops the result if we reconnected meanwhile.
+    pub fn spawn_tvh<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(tvh::Client) -> std::pin::Pin<Box<dyn Future<Output = T> + Send>>,
+        done: impl FnOnce(&mut App, T) + Send + 'static,
+    ) {
+        let Some(c) = self.tvh.clone() else { return };
+        let gen = self.gen;
+        self.spawn(f(c), move |a, v| {
+            if a.gen == gen {
+                done(a, v);
+            }
+        });
+    }
+
+    pub fn save_config_soon(&mut self) {
+        self.config_dirty = Some(Instant::now() + CONFIG_SAVE_DELAY);
+    }
+
+    pub fn save_config_now(&mut self) {
+        self.config_dirty = None;
+        self.cfg.ui.favorites = self.lineup.favorites();
+        if let Err(e) = self.cfg.save() {
+            tracing::error!("saving config: {e:#}");
+            self.toast("Could not save settings");
+        }
+    }
+
+    // ---------------------------------------------------------------- connection
+
+    pub fn connect(&mut self) {
+        self.gen += 1;
+        self.reconnect_at = None;
+        self.epg = EpgCache::default();
+        self.epg_inflight.clear();
+        self.tvh = match tvh::Client::new(&self.cfg.server.url, self.cfg.server.tvh_auth()) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                self.video_status = format!("Invalid server address: {e}");
+                return;
+            }
+        };
+        if self.tuned.is_none() {
+            self.video_status = "Connecting…".into();
+        }
+        self.spawn_tvh(
+            |c| {
+                Box::pin(async move {
+                    let channels = c.channels().await?;
+                    let tags = c.tags().await.unwrap_or_default();
+                    Ok::<_, tvh::Error>((channels, tags))
+                })
+            },
+            |a, r| a.on_lineup(r),
+        );
+    }
+
+    fn on_lineup(&mut self, r: Result<(Vec<Channel>, Vec<ChannelTag>), tvh::Error>) {
+        let (channels, tags) = match r {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("loading channels: {e}");
+                self.video_status = match e {
+                    tvh::Error::Unauthorized => "Tvheadend login failed — check Settings".into(),
+                    _ => format!("Cannot reach Tvheadend ({e})"),
+                };
+                self.reconnect_at = Some(Instant::now() + RECONNECT_DELAY);
+                self.render();
+                return;
+            }
+        };
+        tracing::info!("{} channels, {} tags", channels.len(), tags.len());
+        self.lineup = Lineup::new(channels, tags, self.cfg.ui.favorites.clone());
+        self.lineup.set_filter(Filter::parse(&self.cfg.ui.filter));
+        let (major, minor) = self.lineup.number_widths();
+        self.entry.set_limits(major, minor);
+
+        let t = now();
+        self.load_epg(t, t + BLOCK);
+        self.refresh_dvr();
+        self.load_logos();
+
+        if self.lineup.is_empty() {
+            self.video_status = "No channels found on the server".into();
+        } else if self.playback.is_none() {
+            let start = self
+                .tuned
+                .clone()
+                .or_else(|| self.cfg.ui.last_channel.clone())
+                .filter(|u| self.lineup.get(u).is_some())
+                .or_else(|| self.lineup.step(None, 1).map(|c| c.uuid.clone()));
+            if let Some(uuid) = start {
+                self.tuned = None;
+                self.tune(&uuid);
+            }
+        }
+        self.render();
+    }
+
+    pub fn load_epg(&mut self, from: i64, to: i64) {
+        for block in self.epg.missing_blocks(from, to) {
+            if !self.epg_inflight.insert(block) {
+                continue;
+            }
+            self.spawn_tvh(
+                move |c| Box::pin(async move { c.epg(None, block, block + BLOCK).await }),
+                move |a, r| {
+                    a.epg_inflight.remove(&block);
+                    match r {
+                        Ok(events) => {
+                            a.epg.insert_block(block, events);
+                            a.render();
+                        }
+                        Err(e) => tracing::warn!("loading EPG: {e}"),
+                    }
+                },
+            );
+        }
+    }
+
+    pub fn refresh_dvr(&mut self) {
+        self.dvr_loaded_at = Some(Instant::now());
+        self.spawn_tvh(
+            |c| {
+                Box::pin(async move {
+                    let up = c.dvr_upcoming().await?;
+                    let fin = c.dvr_finished().await?;
+                    let auto = c.autorecs().await.unwrap_or_default();
+                    Ok::<_, tvh::Error>((up, fin, auto))
+                })
+            },
+            |a, r| match r {
+                Ok((up, fin, auto)) => {
+                    a.dvr_upcoming = up;
+                    a.dvr_finished = fin;
+                    a.autorecs = auto;
+                    a.dvr.clamp(a.dvr_items_len());
+                    a.render();
+                }
+                Err(e) => tracing::warn!("loading recordings: {e}"),
+            },
+        );
+    }
+
+    /// Fetches channel logos one at a time in the background.
+    fn load_logos(&mut self) {
+        let Some(c) = self.tvh.clone() else { return };
+        let wanted: Vec<(String, String)> = self
+            .lineup
+            .channels()
+            .iter()
+            .filter(|ch| !self.logos.contains_key(&ch.uuid))
+            .filter_map(|ch| ch.icon_public_url.clone().map(|u| (ch.uuid.clone(), u)))
+            .collect();
+        let gen = self.gen;
+        self.rt.spawn(async move {
+            for (uuid, icon) in wanted {
+                let Some(url) = c.icon_url(&icon) else { continue };
+                let Ok(bytes) = c.fetch(url).await else { continue };
+                let Some(buf) = decode_logo(&bytes) else { continue };
+                post(move |a| {
+                    if a.gen == gen {
+                        a.logos.insert(uuid, Image::from_rgba8(buf));
+                        a.render();
+                    }
+                });
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------- tuning
+
+    pub fn tune(&mut self, uuid: &str) {
+        let Some(tvh) = &self.tvh else { return };
+        if self.lineup.get(uuid).is_none() {
+            return;
+        }
+        let url = tvh.stream_url(uuid, &self.cfg.server.profile);
+        if self.tuned.as_deref() != Some(uuid) {
+            self.previous = self.tuned.replace(uuid.to_string());
+        }
+        self.playback = None;
+        self.retune_at = None;
+        self.video_status = "Tuning…".into();
+        if let Err(e) = self.player.load(url.as_str()) {
+            self.video_status = format!("Playback error: {e}");
+        }
+        self.cfg.ui.last_channel = Some(uuid.to_string());
+        self.save_config_soon();
+        self.show_banner();
+    }
+
+    fn step_channel(&mut self, delta: i64) {
+        let next = self.lineup.step(self.tuned.as_deref(), delta).map(|c| c.uuid.clone());
+        if let Some(uuid) = next {
+            self.tune(&uuid);
+        }
+    }
+
+    fn last_channel(&mut self) {
+        if let Some(prev) = self.previous.clone() {
+            self.tune(&prev);
+        }
+    }
+
+    pub fn play_recording(&mut self, entry: DvrEntry) {
+        let Some(tvh) = &self.tvh else { return };
+        let url = tvh.recording_url(&entry.uuid);
+        self.video_status = "Loading…".into();
+        if let Err(e) = self.player.load(url.as_str()) {
+            self.video_status = format!("Playback error: {e}");
+        }
+        self.playback = Some(Playback { entry, position: 0.0, duration: 0.0, paused: false });
+        self.banner_until = None;
+        self.screen = Screen::Live;
+        self.apply_video_rect();
+    }
+
+    fn stop_playback(&mut self) {
+        self.playback = None;
+        match self.tuned.clone() {
+            Some(uuid) => {
+                self.tuned = None;
+                self.tune(&uuid);
+            }
+            None => {
+                let _ = self.player.stop();
+            }
+        }
+    }
+
+    pub fn on_player(&mut self, ev: PlayerEvent) {
+        match ev {
+            PlayerEvent::Playing => {
+                self.video_status.clear();
+                if let Some(hw) = self.player.hwdec_current() {
+                    tracing::debug!("hardware decoding: {hw}");
+                }
+            }
+            PlayerEvent::Ended { error } => {
+                if self.playback.is_some() {
+                    self.toast("End of recording");
+                    self.stop_playback();
+                } else if self.tuned.is_some() {
+                    self.video_status = error.unwrap_or_else(|| "No Signal".into());
+                    self.retune_at = Some(Instant::now() + RETUNE_DELAY);
+                }
+            }
+            PlayerEvent::Paused(p) => {
+                if let Some(pb) = &mut self.playback {
+                    pb.paused = p;
+                }
+            }
+            PlayerEvent::Position(t) => {
+                if let Some(pb) = &mut self.playback {
+                    pb.position = t;
+                }
+            }
+            PlayerEvent::Duration(d) => {
+                if let Some(pb) = &mut self.playback {
+                    pb.duration = d;
+                }
+            }
+        }
+        self.render();
+    }
+
+    // ---------------------------------------------------------------- overlays
+
+    pub fn show_banner(&mut self) {
+        self.banner_until = Some(Instant::now() + BANNER_TIME);
+    }
+
+    pub fn toast(&mut self, msg: impl Into<String>) {
+        self.toast = msg.into();
+        self.toast_until = Some(Instant::now() + TOAST_TIME);
+    }
+
+    // ---------------------------------------------------------------- timers
+
+    /// Called a few times per second.
+    pub fn tick(&mut self) {
+        let t = Instant::now();
+        let mut dirty = false;
+
+        if let Some(n) = self.entry.tick(t) {
+            self.commit_number(n);
+            dirty = true;
+        }
+        if self.banner_until.is_some_and(|u| t >= u) {
+            self.banner_until = None;
+            dirty = true;
+        }
+        if self.toast_until.is_some_and(|u| t >= u) {
+            self.toast_until = None;
+            self.toast.clear();
+            dirty = true;
+        }
+        if self.reconnect_at.is_some_and(|u| t >= u) {
+            self.connect();
+            dirty = true;
+        }
+        if self.retune_at.is_some_and(|u| t >= u) {
+            self.retune_at = None;
+            if let Some(uuid) = self.tuned.clone() {
+                self.tuned = None;
+                self.tune(&uuid);
+                self.banner_until = None;
+                dirty = true;
+            }
+        }
+        if self.config_dirty.is_some_and(|u| t >= u) {
+            self.save_config_now();
+        }
+        if self.tvh.is_some() && self.dvr_loaded_at.is_some_and(|l| t.duration_since(l) >= DVR_REFRESH) {
+            self.refresh_dvr();
+        }
+
+        // Keep now/next data around and memory bounded.
+        let wall = now();
+        if wall - self.last_prune >= 600 && !self.lineup.is_empty() {
+            self.last_prune = wall;
+            self.epg.prune(wall - 3600);
+            self.load_epg(wall, wall + BLOCK / 2);
+        }
+
+        self.tick_updates(t);
+
+        let clock = fmt_time(wall);
+        if clock != self.clock {
+            self.clock = clock;
+            dirty = true;
+        }
+        // Banner progress and the playback bar move continuously.
+        if dirty || self.banner_until.is_some() || self.playback.is_some() || self.screen == Screen::Guide {
+            self.render();
+        }
+    }
+
+    // ---------------------------------------------------------------- input
+
+    /// Raw key text from Slint. Returns whether it was handled.
+    pub fn on_key_text(&mut self, text: &str) -> bool {
+        if self.osk.is_some() && self.dialog.is_none() && self.osk_text(text) {
+            self.render();
+            return true;
+        }
+        match input::from_key_text(text) {
+            Some(k) => {
+                self.on_key(k);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn on_key(&mut self, k: RemoteKey) {
+        tracing::debug!("key {k:?} on {:?}", self.screen);
+        if self.dialog.is_some() {
+            self.dialog_key(k);
+        } else if self.osk.is_some() {
+            self.osk_key(k);
+        } else if !self.global_key(k) {
+            match self.screen {
+                Screen::Live => self.live_key(k),
+                Screen::Guide => self.guide_key(k),
+                Screen::Dvr => self.dvr_key(k),
+                Screen::Menu => self.menu_key(k),
+            }
+        }
+        self.render();
+    }
+
+    /// Keys that work the same from any screen.
+    fn global_key(&mut self, k: RemoteKey) -> bool {
+        let configured = self.tvh.is_some();
+        match k {
+            RemoteKey::Guide if configured => {
+                if self.screen == Screen::Guide {
+                    self.go_live();
+                } else {
+                    self.open_guide();
+                }
+            }
+            RemoteKey::Dvr if configured => {
+                if self.screen == Screen::Dvr {
+                    self.go_live();
+                } else {
+                    self.open_dvr();
+                }
+            }
+            RemoteKey::Menu if self.screen != Screen::Menu => self.open_settings(),
+            RemoteKey::Exit if configured => self.go_live(),
+            RemoteKey::VolumeUp | RemoteKey::VolumeDown => {
+                let v = self.player.volume() + if k == RemoteKey::VolumeUp { 5 } else { -5 };
+                let _ = self.player.set_volume(v);
+                self.cfg.ui.volume = Some(self.player.volume());
+                self.save_config_soon();
+                let shown = self.player.volume();
+                self.toast(format!("Volume {shown}"));
+            }
+            RemoteKey::Mute => {
+                let _ = self.player.toggle_mute();
+                self.toast("Mute");
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    pub fn go_live(&mut self) {
+        self.entry.cancel();
+        self.screen = Screen::Live;
+        self.apply_video_rect();
+    }
+
+    fn live_key(&mut self, k: RemoteKey) {
+        let t = Instant::now();
+        if self.playback.is_some() {
+            match k {
+                RemoteKey::PlayPause | RemoteKey::Ok => {
+                    let _ = self.player.toggle_pause();
+                }
+                RemoteKey::FastForward | RemoteKey::Right => {
+                    let _ = self.player.seek(30.0);
+                }
+                RemoteKey::Rewind | RemoteKey::Left => {
+                    let _ = self.player.seek(-10.0);
+                }
+                RemoteKey::Stop | RemoteKey::Back => self.stop_playback(),
+                _ => {}
+            }
+            return;
+        }
+        match k {
+            RemoteKey::Digit(d) => {
+                if let Entry::Commit(n) = self.entry.digit(d, t) {
+                    self.commit_number(n);
+                }
+            }
+            RemoteKey::Dot => {
+                self.entry.dot(t);
+            }
+            RemoteKey::Ok if self.entry.is_active() => {
+                if let Some(n) = self.entry.commit() {
+                    self.commit_number(n);
+                }
+            }
+            RemoteKey::Back if self.entry.is_active() => {
+                self.entry.backspace(t);
+            }
+            RemoteKey::Ok | RemoteKey::Info => {
+                if self.banner_until.is_some() {
+                    self.banner_until = None;
+                } else {
+                    self.show_banner();
+                }
+            }
+            RemoteKey::Back => self.banner_until = None,
+            RemoteKey::ChannelUp | RemoteKey::Up => self.step_channel(1),
+            RemoteKey::ChannelDown | RemoteKey::Down => self.step_channel(-1),
+            RemoteKey::Last => self.last_channel(),
+            RemoteKey::Record => {
+                let t = now();
+                let ev = self.tuned.as_deref().and_then(|u| self.epg.at(u, t)).cloned();
+                match ev {
+                    Some(ev) => self.record_dialog(&ev),
+                    None => self.toast("No program information to record"),
+                }
+            }
+            RemoteKey::Yellow => {
+                if let Some(uuid) = self.tuned.clone() {
+                    let fav = self.lineup.toggle_favorite(&uuid);
+                    self.save_config_soon();
+                    self.toast(if fav { "Added to Favorites" } else { "Removed from Favorites" });
+                    self.show_banner();
+                }
+            }
+            RemoteKey::Blue => self.cycle_filter(),
+            _ => {}
+        }
+    }
+
+    pub fn cycle_filter(&mut self) {
+        self.lineup.cycle_filter();
+        self.cfg.ui.filter = self.lineup.filter().to_config();
+        self.save_config_soon();
+        let label = self.lineup.filter_label();
+        self.toast(format!("Showing: {label}"));
+    }
+
+    /// A typed number finished. Tunes on live TV; moves the selection in the guide.
+    fn commit_number(&mut self, n: tvh::ChannelNumber) {
+        let Some(ch) = self.lineup.by_number(n).map(|c| c.uuid.clone()) else {
+            self.toast(format!("Channel {n} not available"));
+            return;
+        };
+        match self.screen {
+            Screen::Guide => self.guide_jump_to(&ch),
+            _ => self.tune(&ch),
+        }
+    }
+
+    // ---------------------------------------------------------------- rendering
+
+    /// Window-relative video placement: full screen, or the guide's preview hole.
+    pub fn apply_video_rect(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let rect = (self.screen == Screen::Guide).then(|| {
+            let w = ui.window().size().to_logical(ui.window().scale_factor());
+            let (ww, wh) = (w.width as f64, w.height as f64);
+            let (x, y) = (ui.get_preview_x() as f64, ui.get_preview_y() as f64);
+            let (pw, ph) = (ui.get_preview_w() as f64, ui.get_preview_h() as f64);
+            player::VideoRect { left: x / ww, top: y / wh, right: (ww - x - pw) / ww, bottom: (wh - y - ph) / wh }
+        });
+        let _ = self.player.set_video_rect(rect);
+    }
+
+    pub fn render(&mut self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        ui.set_screen(self.screen);
+        ui.set_clock(self.clock.clone().into());
+        ui.set_toast(self.toast.clone().into());
+        ui.set_video_status(self.video_status.clone().into());
+
+        let entry = match self.screen {
+            Screen::Live | Screen::Guide => self.entry_display(),
+            _ => String::new(),
+        };
+        ui.set_entry_text(entry.into());
+
+        let banner = self.banner_until.is_some() && self.playback.is_none();
+        ui.set_banner_visible(banner);
+        if banner {
+            ui.set_banner(self.banner_data());
+        }
+        self.render_playback(&ui);
+
+        match self.screen {
+            Screen::Guide => self.render_guide(&ui),
+            Screen::Dvr => self.render_dvr(&ui),
+            Screen::Menu => self.render_menu(&ui),
+            Screen::Live => {}
+        }
+        self.render_osk(&ui);
+        self.render_dialog(&ui);
+    }
+
+    fn entry_display(&self) -> String {
+        self.entry.display_text()
+    }
+
+    fn banner_data(&self) -> BannerData {
+        let t = now();
+        let Some(ch) = self.tuned.as_deref().and_then(|u| self.lineup.get(u)) else {
+            return BannerData::default();
+        };
+        let (cur, next) = self.epg.now_next(&ch.uuid, t);
+        let progress = cur.map(|e| (t - e.start) as f32 / (e.stop - e.start).max(1) as f32).unwrap_or(0.0);
+        BannerData {
+            number: ch.number.to_string().into(),
+            name: ch.name.clone().into(),
+            logo: self.logos.get(&ch.uuid).cloned().unwrap_or_default(),
+            now_title: cur.map(|e| e.title.clone()).unwrap_or_default().into(),
+            now_time: cur.map(|e| fmt_range(e.start, e.stop)).unwrap_or_default().into(),
+            next_title: next.map(|e| e.title.clone()).unwrap_or_default().into(),
+            next_time: next.map(|e| fmt_time(e.start)).unwrap_or_default().into(),
+            progress,
+            recording: self.channel_recording(&ch.uuid),
+            favorite: self.lineup.is_favorite(&ch.uuid),
+            filter: match self.lineup.filter() {
+                Filter::All => String::new(),
+                _ => self.lineup.filter_label(),
+            }
+            .into(),
+        }
+    }
+
+    fn render_playback(&self, ui: &AppWindow) {
+        ui.set_playback_visible(self.playback.is_some() && self.screen == Screen::Live);
+        if let Some(pb) = &self.playback {
+            let fmt = |s: f64| {
+                let s = s.max(0.0) as u64;
+                format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+            };
+            ui.set_playback_title(pb.entry.disp_title.clone().into());
+            ui.set_playback_position(format!("{} / {}", fmt(pb.position), fmt(pb.duration)).into());
+            ui.set_playback_progress(if pb.duration > 0.0 { (pb.position / pb.duration) as f32 } else { 0.0 });
+            ui.set_playback_paused(pb.paused);
+        }
+    }
+
+    /// Whether a recording is in progress on this channel.
+    pub fn channel_recording(&self, uuid: &str) -> bool {
+        self.dvr_upcoming.iter().any(|d| d.is_recording() && d.channel.as_deref() == Some(uuid))
+    }
+
+    /// DVR entry scheduled for this EPG event, if any.
+    pub fn dvr_for_event(&self, ev: &EpgEvent) -> Option<&DvrEntry> {
+        self.dvr_upcoming.iter().find(|d| d.broadcast == Some(ev.event_id)).or_else(|| {
+            ev.dvr_uuid.as_deref().and_then(|u| self.dvr_upcoming.iter().find(|d| d.uuid == u))
+        })
+    }
+}
+
+/// Decodes and shrinks a channel logo to at most 128x64.
+fn decode_logo(bytes: &[u8]) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let img = img.resize(128, 64, image::imageops::FilterType::Triangle).to_rgba8();
+    Some(SharedPixelBuffer::clone_from_slice(img.as_raw(), img.width(), img.height()))
+}
+
+/// Shorthand for building Slint list models.
+pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
+    ModelRc::new(VecModel::from(v))
+}

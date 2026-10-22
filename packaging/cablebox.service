@@ -1,0 +1,29 @@
+# CableBox as the device's only session: owns tty1 and draws straight to KMS/DRM.
+# Enable with:  sudo systemctl enable --now cablebox
+[Unit]
+Description=CableBox TV shell
+After=systemd-user-sessions.service network-online.target sound.target getty@tty1.service
+Wants=network-online.target
+Conflicts=getty@tty1.service
+
+[Service]
+User=cablebox
+SupplementaryGroups=video render input audio
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+UtmpIdentifier=tty1
+Environment=SLINT_BACKEND=linuxkms
+Environment=RUST_LOG=info
+ExecStart=/usr/bin/cablebox
+# "Restart CableBox" in Settings (and self-updates) exit the process; come straight back.
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=graphical.target

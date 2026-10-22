@@ -1,0 +1,64 @@
+export struct BannerData {
+    number: string,
+    name: string,
+    logo: image,
+    now-title: string,
+    now-time: string,
+    next-title: string,
+    next-time: string,
+    progress: float,
+    recording: bool,
+    favorite: bool,
+    filter: string,
+}
+
+export struct GuideCell {
+    title: string,
+    // Horizontal placement as a fraction of the visible time span.
+    x: float,
+    w: float,
+    selected: bool,
+    recording: bool,
+    airing: bool,
+    // Program continues beyond the visible window.
+    more-left: bool,
+    more-right: bool,
+}
+
+export struct GuideRow {
+    number: string,
+    name: string,
+    logo: image,
+    favorite: bool,
+    tuned: bool,
+    cells: [GuideCell],
+}
+
+export struct GuideDetail {
+    title: string,
+    episode: string,
+    when: string,
+    channel: string,
+    synopsis: string,
+    recording: string,
+}
+
+export struct DvrItem {
+    title: string,
+    subtitle: string,
+    when: string,
+    channel: string,
+    status: string,
+    selected: bool,
+    recording: bool,
+}
+
+export struct MenuItem {
+    label: string,
+    value: string,
+    selected: bool,
+    // Greyed out / informational.
+    disabled: bool,
+}
+
+export enum Screen { live, guide, dvr, menu }

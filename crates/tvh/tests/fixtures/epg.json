@@ -1,0 +1,4 @@
+{"totalCount":2,"entries":[
+ {"eventId":1001,"episodeId":5,"channelName":"NBC","channelUuid":"c2","channelNumber":"4","channelIcon":"imagecache/8","start":1761080400,"stop":1761082200,"title":"Evening News","subtitle":"Tonight's top stories","summary":"Short","description":"The full evening newscast.","genre":[32],"nextEventId":1002,"dvrUuid":"d1","dvrState":"scheduled"},
+ {"eventId":1002,"channelName":"NBC","channelUuid":"c2","channelNumber":"4","start":1761082200,"stop":1761084000,"title":"Game Show","episodeOnscreen":"S03E12","serieslinkUri":"crid://nbc/gs"}
+]}

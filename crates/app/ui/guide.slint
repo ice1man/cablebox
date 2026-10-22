@@ -1,0 +1,284 @@
+import { Theme } from "theme.slint";
+import { GuideRow, GuideDetail } from "types.slint";
+
+export component KeyLegend inherits HorizontalLayout {
+    in property <color> color;
+    in property <string> text;
+    spacing: 6px;
+    Rectangle {
+        width: 18px;
+        height: 18px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 9px;
+        background: root.color;
+    }
+    Text {
+        text: root.text;
+        color: Theme.text-dim;
+        font-size: 14px;
+        vertical-alignment: center;
+    }
+}
+
+// Full-screen grid guide. Video plays in the top-right preview hole (drawn by mpv
+// underneath, positioned by Rust to `preview-*`).
+export component GuidePage inherits Rectangle {
+    in property <[GuideRow]> rows;
+    in property <[string]> times;
+    in property <string> date;
+    in property <string> filter;
+    in property <GuideDetail> detail;
+    // Fraction across the grid where "now" sits, or < 0 if outside the window.
+    in property <float> now-x;
+    in property <string> clock;
+
+    out property <length> preview-x: self.width - Theme.safe-x - self.preview-w;
+    out property <length> preview-y: Theme.safe-y;
+    out property <length> preview-w: 384px;
+    out property <length> preview-h: 216px;
+
+    property <length> label-w: 250px;
+    property <length> row-h: 50px;
+    property <length> grid-top: 284px;
+    property <length> grid-x: Theme.safe-x + self.label-w;
+    property <length> grid-w: self.width - Theme.safe-x * 2 - self.label-w;
+
+    // Opaque background everywhere except the preview hole, where mpv's video shows through.
+    property <length> hole-l: self.preview-x - 3px;
+    property <length> hole-t: self.preview-y - 3px;
+    property <length> hole-r: self.preview-x + self.preview-w + 3px;
+    property <length> hole-b: self.preview-y + self.preview-h + 3px;
+    Rectangle { x: 0; y: 0; width: root.width; height: root.hole-t; background: Theme.panel-dark; }
+    Rectangle { x: 0; y: root.hole-b; width: root.width; height: root.height - root.hole-b; background: Theme.panel-dark; }
+    Rectangle { x: 0; y: root.hole-t; width: root.hole-l; height: root.hole-b - root.hole-t; background: Theme.panel-dark; }
+    Rectangle { x: root.hole-r; y: root.hole-t; width: root.width - root.hole-r; height: root.hole-b - root.hole-t; background: Theme.panel-dark; }
+
+    // Top area: details panel + preview hole.
+    Rectangle {
+        x: Theme.safe-x;
+        y: Theme.safe-y;
+        width: root.preview-x - Theme.safe-x - 16px;
+        height: root.preview-h;
+        border-radius: Theme.radius;
+        background: Theme.panel;
+        border-width: 2px;
+        border-color: Theme.border;
+        VerticalLayout {
+            padding: 16px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.detail.title;
+                    color: Theme.text;
+                    font-size: 26px;
+                    font-weight: 900;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.detail.recording != "": Rectangle {
+                    width: rec-label.preferred-width + 16px;
+                    height: 24px;
+                    border-radius: 4px;
+                    background: Theme.rec;
+                    rec-label := Text {
+                        text: root.detail.recording;
+                        color: white;
+                        font-size: 13px;
+                        font-weight: 800;
+                    }
+                }
+            }
+            Text {
+                text: root.detail.channel + "   " + root.detail.when;
+                color: Theme.focus;
+                font-size: 16px;
+            }
+            if root.detail.episode != "": Text {
+                text: root.detail.episode;
+                color: Theme.text-dim;
+                font-size: 16px;
+                overflow: elide;
+            }
+            Text {
+                text: root.detail.synopsis;
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 400;
+                wrap: word-wrap;
+                overflow: elide;
+                vertical-stretch: 1;
+            }
+        }
+    }
+
+    // Preview frame (transparent hole; mpv draws the video under it).
+    Rectangle {
+        x: root.preview-x - 3px;
+        y: root.preview-y - 3px;
+        width: root.preview-w + 6px;
+        height: root.preview-h + 6px;
+        border-width: 3px;
+        border-color: Theme.border;
+        background: transparent;
+    }
+
+    // Time header
+    Rectangle {
+        x: Theme.safe-x;
+        y: root.grid-top - 34px;
+        width: root.label-w - 4px;
+        height: 30px;
+        background: Theme.focus;
+        border-radius: 4px;
+        Text {
+            text: root.date;
+            color: Theme.focus-text;
+            font-size: 16px;
+            font-weight: 900;
+        }
+    }
+    for t[i] in root.times: Rectangle {
+        x: root.grid-x + i * root.grid-w / root.times.length;
+        y: root.grid-top - 34px;
+        width: root.grid-w / root.times.length - 4px;
+        height: 30px;
+        background: Theme.panel-top;
+        border-radius: 4px;
+        Text {
+            x: 10px;
+            text: t;
+            color: Theme.text;
+            font-size: 16px;
+            font-weight: 800;
+        }
+    }
+
+    // Rows
+    for r[ri] in root.rows: Rectangle {
+        x: Theme.safe-x;
+        y: root.grid-top + ri * root.row-h;
+        width: root.width - Theme.safe-x * 2;
+        height: root.row-h - 4px;
+
+        // Channel label
+        Rectangle {
+            x: 0;
+            width: root.label-w - 4px;
+            border-radius: 4px;
+            background: r.tuned ? Theme.panel-top : Theme.row;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 8px;
+                spacing: 8px;
+                Text {
+                    text: r.number;
+                    color: Theme.focus;
+                    font-size: 20px;
+                    font-weight: 900;
+                    width: 64px;
+                    vertical-alignment: center;
+                }
+                if r.logo.width > 0: Image {
+                    source: r.logo;
+                    width: 44px;
+                    height: 28px;
+                    y: (parent.height - self.height) / 2;
+                    image-fit: contain;
+                }
+                Text {
+                    text: r.name;
+                    color: Theme.text;
+                    font-size: 16px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if r.favorite: Text {
+                    text: "★";
+                    color: Theme.fav;
+                    font-size: 16px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Empty row background
+        Rectangle {
+            x: root.label-w;
+            width: root.grid-w - 4px;
+            border-radius: 4px;
+            background: Theme.past;
+        }
+
+        for c in r.cells: Rectangle {
+            x: root.label-w + c.x * root.grid-w;
+            width: max(c.w * root.grid-w - 4px, 2px);
+            border-radius: 4px;
+            background: c.selected ? Theme.focus : c.airing ? Theme.airing : Theme.row;
+            clip: true;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                spacing: 4px;
+                if c.more-left: Text {
+                    text: "◀";
+                    font-size: 12px;
+                    color: c.selected ? Theme.focus-text : Theme.text-dim;
+                    vertical-alignment: center;
+                }
+                if c.recording: Text {
+                    text: "●";
+                    font-size: 14px;
+                    color: Theme.rec;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: c.title;
+                    color: c.selected ? Theme.focus-text : Theme.text;
+                    font-size: 16px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if c.more-right: Text {
+                    text: "▶";
+                    font-size: 12px;
+                    color: c.selected ? Theme.focus-text : Theme.text-dim;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // "Now" marker
+    if root.now-x >= 0 && root.now-x <= 1: Rectangle {
+        x: root.grid-x + root.now-x * root.grid-w - 1px;
+        y: root.grid-top - 4px;
+        width: 2px;
+        height: root.rows.length * root.row-h;
+        background: Theme.rec;
+    }
+
+    // Footer
+    HorizontalLayout {
+        x: Theme.safe-x;
+        y: root.height - Theme.safe-y - 24px;
+        width: root.width - Theme.safe-x * 2;
+        height: 24px;
+        spacing: 22px;
+        KeyLegend { color: Theme.key-red; text: "−24h"; }
+        KeyLegend { color: Theme.key-green; text: "+24h"; }
+        KeyLegend { color: Theme.key-yellow; text: "Favorite"; }
+        KeyLegend { color: Theme.key-blue; text: "Filter: " + root.filter; }
+        KeyLegend { color: Theme.rec; text: "Record"; }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: root.clock;
+            color: Theme.text;
+            font-size: 18px;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+    }
+}
