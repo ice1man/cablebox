@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 use zbus::{proxy, Connection};
 
 use crate::{Error, Result};
@@ -81,7 +81,7 @@ struct Outcome {
 
 async fn transaction(conn: &Connection) -> Result<TransactionProxy<'static>> {
     let path = PackageKitProxy::new(conn).await?.create_transaction().await?;
-    let tx = TransactionProxy::builder(conn).path(path)?.build().await?;
+    let tx = TransactionProxy::builder(conn).path(path).build().await?;
     // Non-interactive: never block on a debconf prompt the TV can't show.
     tx.set_hints(&["interactive=false", "background=false"]).await?;
     Ok(tx)

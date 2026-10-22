@@ -1,0 +1,20 @@
+# cargo-audit exceptions. Only "unmaintained" notices are listed here, never vulnerabilities.
+# Re-check each entry when upgrading Slint (pinned at 1.14 in crates/app/Cargo.toml).
+[advisories]
+ignore = [
+    # bincode: used only by Slint's UI compiler (via typed-index-collections) at build time.
+    "RUSTSEC-2025-0141",
+    # paste: compile-time proc-macro (via image's exr/pulp); generates no runtime code.
+    "RUSTSEC-2024-0436",
+    # rustybuzz: shapes text in Slint's own SVG assets (resvg). Never sees network data;
+    # channel logos are decoded by the `image` crate with size limits instead.
+    "RUSTSEC-2026-0206",
+    # ttf-parser: parses the UI's local system/embedded fonts (femtovg). No untrusted fonts.
+    "RUSTSEC-2026-0192",
+    # zbus 5 stack: only via Slint's winit backend, which is a development-only feature
+    # (`winit`). Shipped packages are built with `--no-default-features --features kms`
+    # and use zbus 6 (crates/sysctl).
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0372", # zvariant_derive
+]

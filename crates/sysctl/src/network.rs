@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 use zbus::{proxy, Connection};
 
 use crate::{Error, Result};
@@ -17,7 +17,7 @@ trait NetworkManager {
     fn get_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
     fn add_and_activate_connection(
         &self,
-        connection: HashMap<&str, HashMap<&str, Value<'_>>>,
+        connection: HashMap<&str, HashMap<&str, Variant<'_>>>,
         device: &ObjectPath<'_>,
         specific_object: &ObjectPath<'_>,
     ) -> zbus::Result<(OwnedObjectPath, OwnedObjectPath)>;
@@ -40,7 +40,7 @@ trait Device {
     default_service = "org.freedesktop.NetworkManager"
 )]
 trait Wireless {
-    fn request_scan(&self, options: HashMap<&str, Value<'_>>) -> zbus::Result<()>;
+    fn request_scan(&self, options: HashMap<&str, Variant<'_>>) -> zbus::Result<()>;
     fn get_all_access_points(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
     #[zbus(property)]
     fn active_access_point(&self) -> zbus::Result<OwnedObjectPath>;
@@ -74,7 +74,7 @@ trait ActiveConnection {
 #[proxy(interface = "org.freedesktop.NetworkManager.IP4Config", default_service = "org.freedesktop.NetworkManager")]
 trait Ip4Config {
     #[zbus(property)]
-    fn address_data(&self) -> zbus::Result<Vec<HashMap<String, OwnedValue>>>;
+    fn address_data(&self) -> zbus::Result<Vec<HashMap<String, OwnedVariant>>>;
 }
 
 const DEVICE_TYPE_WIFI: u32 = 2;
@@ -105,14 +105,14 @@ pub async fn status() -> Result<Status> {
     if primary.as_str() == "/" {
         return Ok(st);
     }
-    let active = ActiveConnectionProxy::builder(&conn).path(primary)?.build().await?;
+    let active = ActiveConnectionProxy::builder(&conn).path(primary).build().await?;
     st.name = active.id().await.unwrap_or_default();
     st.wifi = active.kind().await.unwrap_or_default() == "802-11-wireless";
     if let Ok(ip4) = active.ip4_config().await {
-        let cfg = Ip4ConfigProxy::builder(&conn).path(ip4)?.build().await?;
+        let cfg = Ip4ConfigProxy::builder(&conn).path(ip4).build().await?;
         if let Some(addr) = cfg.address_data().await.ok().and_then(|a| a.into_iter().next()) {
             if let Some(v) = addr.get("address") {
-                st.address = String::try_from(v.try_clone().map_err(zbus::Error::from)?).unwrap_or_default();
+                st.address = String::try_from(v.try_clone()?).unwrap_or_default();
             }
         }
     }
@@ -122,7 +122,7 @@ pub async fn status() -> Result<Status> {
 async fn wifi_device(conn: &Connection) -> Result<OwnedObjectPath> {
     let nm = NetworkManagerProxy::new(conn).await?;
     for path in nm.get_devices().await? {
-        let dev = DeviceProxy::builder(conn).path(path.clone())?.build().await?;
+        let dev = DeviceProxy::builder(conn).path(path.clone()).build().await?;
         if dev.device_type().await? == DEVICE_TYPE_WIFI {
             return Ok(path);
         }
@@ -134,7 +134,7 @@ async fn wifi_device(conn: &Connection) -> Result<OwnedObjectPath> {
 pub async fn scan() -> Result<Vec<AccessPointInfo>> {
     let conn = Connection::system().await?;
     let dev = wifi_device(&conn).await?;
-    let wifi = WirelessProxy::builder(&conn).path(dev)?.build().await?;
+    let wifi = WirelessProxy::builder(&conn).path(dev).build().await?;
     if wifi.request_scan(HashMap::new()).await.is_ok() {
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
@@ -142,7 +142,7 @@ pub async fn scan() -> Result<Vec<AccessPointInfo>> {
     let mut out: Vec<AccessPointInfo> = Vec::new();
     for path in wifi.get_all_access_points().await? {
         let is_active = active.as_ref() == Some(&path);
-        let ap = AccessPointProxy::builder(&conn).path(path)?.build().await?;
+        let ap = AccessPointProxy::builder(&conn).path(path).build().await?;
         let ssid = String::from_utf8_lossy(&ap.ssid().await?).into_owned();
         if ssid.is_empty() {
             continue;
@@ -169,16 +169,16 @@ pub async fn connect(ssid: &str, password: Option<&str>) -> Result<()> {
     let dev = wifi_device(&conn).await?;
     let nm = NetworkManagerProxy::new(&conn).await?;
 
-    let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
-    settings.insert("connection", HashMap::from([("id", Value::from(ssid)), ("type", Value::from("802-11-wireless"))]));
-    settings.insert("802-11-wireless", HashMap::from([("ssid", Value::from(ssid.as_bytes().to_vec()))]));
+    let mut settings: HashMap<&str, HashMap<&str, Variant<'_>>> = HashMap::new();
+    settings.insert("connection", HashMap::from([("id", Variant::from(ssid)), ("type", Variant::from("802-11-wireless"))]));
+    settings.insert("802-11-wireless", HashMap::from([("ssid", Variant::from(ssid.as_bytes().to_vec()))]));
     if let Some(pw) = password.filter(|p| !p.is_empty()) {
         settings.insert(
             "802-11-wireless-security",
-            HashMap::from([("key-mgmt", Value::from("wpa-psk")), ("psk", Value::from(pw))]),
+            HashMap::from([("key-mgmt", Variant::from("wpa-psk")), ("psk", Variant::from(pw))]),
         );
     }
-    let root = ObjectPath::try_from("/").map_err(zbus::Error::from)?;
+    let root = ObjectPath::try_from("/")?;
     nm.add_and_activate_connection(settings, &dev.as_ref(), &root).await?;
     Ok(())
 }

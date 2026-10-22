@@ -13,10 +13,7 @@ thiserror.workspace = true
 tracing.workspace = true
 diqwest = "3.2"
 url = "2"
+rustls.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-
-[features]
-# Tvheadend is usually plain HTTP on the LAN; enable for https:// servers.
-tls = ["reqwest/rustls"]

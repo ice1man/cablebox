@@ -9,7 +9,7 @@ description = "Retro cable-box shell for Tvheadend"
 [dependencies]
 tvh = { path = "../tvh" }
 player = { path = "../player" }
-slint = { version = "=1.14.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg"] }
+slint = { version = "=1.14.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
 anyhow.workspace = true
 serde.workspace = true
 tokio.workspace = true
@@ -26,6 +26,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 slint-build = "=1.14.1"
 
 [features]
+default = ["winit"]
+# Windowed backend for desktop development. Not shipped in packages.
+winit = ["slint/backend-winit"]
 # Render straight to KMS/DRM with libinput (production session). Needs libinput-dev, libgbm-dev, libudev-dev.
 kms = ["slint/backend-linuxkms-noseat"]
 
@@ -34,6 +37,8 @@ name = "cablebox"
 maintainer = "ice <ice@icecubelabs.xyz>"
 section = "video"
 priority = "optional"
+# Packages only get the KMS backend; the windowed (winit) backend is for development.
+default-features = false
 features = ["kms"]
 depends = "$auto, packagekit, network-manager, polkitd | policykit-1, adduser"
 recommends = "v4l-utils, fonts-dejavu-core"
@@ -47,6 +52,8 @@ assets = [
     ["../../packaging/cablebox.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/cablebox-cec.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/50-cablebox.rules", "usr/share/polkit-1/rules.d/", "644"],
+    # Repo signing keys. Shipping them lets a key rotation reach boxes through normal updates.
+    ["../../packaging/cablebox-archive-keyring.gpg", "usr/share/keyrings/cablebox.gpg", "644"],
     ["../../README.md", "usr/share/doc/cablebox/", "644"],
 ]
 
