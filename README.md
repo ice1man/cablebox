@@ -88,7 +88,7 @@ https://apt.icecubelabs.xyz/:
 
 ```sh
 sudo curl -fsSLo /usr/share/keyrings/cablebox.gpg https://apt.icecubelabs.xyz/cablebox.gpg
-printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\n' \
+printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\nArchitectures: amd64 arm64\n' \
   | sudo tee /etc/apt/sources.list.d/cablebox.sources
 sudo apt update && sudo apt install cablebox
 sudo systemctl enable --now cablebox cablebox-cec
