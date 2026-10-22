@@ -81,7 +81,25 @@ Key names are in `RemoteKey::from_name`. This also works over SSH on a device.
 
 Tests: `cargo test --workspace`. The read-only D-Bus probe is `cargo run -p sysctl --example probe`.
 
+## Install from apt
+
+Prebuilt packages for Debian 13 / trixie-based Raspberry Pi OS (amd64, arm64) are published at
+https://ice1man.github.io/iclx-apt/:
+
+```sh
+sudo curl -fsSLo /usr/share/keyrings/cablebox.gpg https://ice1man.github.io/iclx-apt/cablebox.gpg
+printf 'Types: deb\nURIs: https://ice1man.github.io/iclx-apt/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\n' \
+  | sudo tee /etc/apt/sources.list.d/cablebox.sources
+sudo apt update && sudo apt install cablebox
+sudo systemctl enable --now cablebox cablebox-cec
+```
+
+Signing key fingerprint: `F46D BCC4 C6F9 98CC AD48  55B8 07F1 F103 2119 CCCD`.
+New versions published there appear in CableBox's on-screen update prompt.
+
 ## Deploying to a box
+
+To build the packages yourself:
 
 ```sh
 cargo install cargo-deb
