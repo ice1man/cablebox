@@ -85,13 +85,13 @@ Tests: `cargo test --workspace`. The read-only D-Bus probe is `cargo run -p sysc
 
 ## Install from apt
 
-Prebuilt packages for Debian 13 / trixie-based Raspberry Pi OS (amd64, arm64, riscv64) are published at
-https://apt.icecubelabs.xyz/:
+Prebuilt packages for Debian 13 / trixie-based Raspberry Pi OS (amd64, arm64, riscv64) are published
+in the ICLX apt repository, https://apt.icecubelabs.xyz/:
 
 ```sh
-sudo curl -fsSLo /usr/share/keyrings/cablebox.gpg https://apt.icecubelabs.xyz/cablebox.gpg
-printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\nArchitectures: amd64 arm64 riscv64\n' \
-  | sudo tee /etc/apt/sources.list.d/cablebox.sources
+sudo curl -fsSLo /usr/share/keyrings/iclx-archive-keyring.gpg https://apt.icecubelabs.xyz/iclx-archive-keyring.gpg
+printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/iclx-archive-keyring.gpg\nArchitectures: amd64 arm64 riscv64\n' \
+  | sudo tee /etc/apt/sources.list.d/iclx.sources
 sudo apt update && sudo apt install cablebox
 sudo systemctl enable --now cablebox cablebox-cec
 ```
@@ -146,7 +146,7 @@ Display: `Settings → Display → Resolution` picks a connector mode (applied t
 - **Untrusted input limits:** API replies are capped at 64 MiB, logos at 2 MiB and 4096×4096
   pixels. mpv loads no user config or scripts, and ffmpeg may only open http/https/tcp/tls.
 - **Updates:** only signed packages from configured repos (PackageKit `ONLY_TRUSTED`). The
-  `cablebox` package ships the apt repo's keyring, so key rotations arrive as normal updates.
+  `cablebox` package depends on `iclx-archive-keyring`, so repo key rotations arrive as normal updates.
 - **Dependencies:** `cargo audit` is clean. Accepted "unmaintained" notices are documented
   in `.cargo/audit.toml`.
 

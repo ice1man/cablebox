@@ -40,7 +40,7 @@ priority = "optional"
 # Packages only get the KMS backend; the windowed (winit) backend is for development.
 default-features = false
 features = ["kms"]
-depends = "$auto, packagekit, network-manager, polkitd | policykit-1, adduser"
+depends = "$auto, packagekit, network-manager, polkitd | policykit-1, adduser, iclx-archive-keyring"
 recommends = "v4l-utils, fonts-dejavu-core"
 extended-description = """\
 Boots straight into a full-screen, remote-controlled TV interface styled like a classic \
@@ -52,8 +52,6 @@ assets = [
     ["../../packaging/cablebox.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/cablebox-cec.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/50-cablebox.rules", "usr/share/polkit-1/rules.d/", "644"],
-    # Repo signing keys. Shipping them lets a key rotation reach boxes through normal updates.
-    ["../../packaging/cablebox-archive-keyring.gpg", "usr/share/keyrings/cablebox.gpg", "644"],
     ["../../README.md", "usr/share/doc/cablebox/", "644"],
 ]
 
@@ -61,8 +59,8 @@ assets = [
 # (same as what $auto finds on amd64). Used by tools/build-cross.sh.
 [package.metadata.deb.variants.arm64]
 name = "cablebox"
-depends = "libc6 (>= 2.39), libgbm1 (>= 17.1.0~rc2), libinput10 (>= 1.7.2), libmpv2 (>= 0.29), libudev1 (>= 183), libxkbcommon0 (>= 0.5.0), packagekit, network-manager, polkitd | policykit-1, adduser"
+depends = "libc6 (>= 2.39), libgbm1 (>= 17.1.0~rc2), libinput10 (>= 1.7.2), libmpv2 (>= 0.29), libudev1 (>= 183), libxkbcommon0 (>= 0.5.0), packagekit, network-manager, polkitd | policykit-1, adduser, iclx-archive-keyring"
 
 [package.metadata.deb.variants.riscv64]
 name = "cablebox"
-depends = "libc6 (>= 2.39), libgbm1 (>= 17.1.0~rc2), libinput10 (>= 1.7.2), libmpv2 (>= 0.29), libudev1 (>= 183), libxkbcommon0 (>= 0.5.0), packagekit, network-manager, polkitd | policykit-1, adduser"
+depends = "libc6 (>= 2.39), libgbm1 (>= 17.1.0~rc2), libinput10 (>= 1.7.2), libmpv2 (>= 0.29), libudev1 (>= 183), libxkbcommon0 (>= 0.5.0), packagekit, network-manager, polkitd | policykit-1, adduser, iclx-archive-keyring"
