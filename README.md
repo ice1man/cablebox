@@ -17,7 +17,8 @@ Wi-Fi and system updates all happen on screen.
   when one is needed, and a restart when CableBox updated itself.
 - **Input**: keyboard, IR receivers, and HDMI-CEC (your TV's remote), all through one key map.
 
-Runs on Raspberry Pi 4/5 (arm64) and x86_64, on Debian 13 or Raspberry Pi OS.
+Runs on x86_64, Raspberry Pi 4/5 (arm64) and RISC-V boards (riscv64), on Debian 13 or
+trixie-based Raspberry Pi OS.
 
 ## Architecture
 
@@ -83,12 +84,12 @@ Tests: `cargo test --workspace`. The read-only D-Bus probe is `cargo run -p sysc
 
 ## Install from apt
 
-Prebuilt packages for Debian 13 / trixie-based Raspberry Pi OS (amd64, arm64) are published at
+Prebuilt packages for Debian 13 / trixie-based Raspberry Pi OS (amd64, arm64, riscv64) are published at
 https://apt.icecubelabs.xyz/:
 
 ```sh
 sudo curl -fsSLo /usr/share/keyrings/cablebox.gpg https://apt.icecubelabs.xyz/cablebox.gpg
-printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\nArchitectures: amd64 arm64\n' \
+printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\nArchitectures: amd64 arm64 riscv64\n' \
   | sudo tee /etc/apt/sources.list.d/cablebox.sources
 sudo apt update && sudo apt install cablebox
 sudo systemctl enable --now cablebox cablebox-cec
@@ -104,16 +105,23 @@ To build the packages yourself:
 ```sh
 cargo install cargo-deb
 cargo deb -p cablebox                       # amd64, builds with --features kms
-tools/build-arm64.sh                        # arm64 for the Pi, cross-compiled (see below)
+tools/build-cross.sh arm64                  # Raspberry Pi, cross-compiled (see below)
+tools/build-cross.sh riscv64                # RISC-V boards
 sudo apt install ./target/debian/cablebox_*.deb
 sudo systemctl enable --now cablebox cablebox-cec
 ```
 
-The arm64 build needs `gcc-aarch64-linux-gnu` and `rustup target add aarch64-unknown-linux-gnu`.
-It doesn't need root or a multiarch setup: `tools/arm64-sysroot.sh` downloads the five libraries
+Cross builds need the target's compiler (`gcc-aarch64-linux-gnu` or `gcc-riscv64-linux-gnu`) and
+its Rust target (`rustup target add aarch64-unknown-linux-gnu` or `riscv64gc-unknown-linux-gnu`).
+They don't need root or a multiarch setup: `tools/cross-sysroot.sh ARCH` downloads the five libraries
 CableBox links against from Debian trixie, verifying the archive signature and every hash, into
-`target/arm64-sysroot`. The result needs glibc 2.39+, so the target must be **Raspberry Pi OS
-based on trixie** (or Debian 13 arm64). Bookworm-based images won't work.
+`target/ARCH-sysroot`. The result needs glibc 2.39+, so the target must run Debian 13 (or **Raspberry
+Pi OS based on trixie**). Bookworm-based images won't work.
+
+On RISC-V, GPU and video-decoder drivers vary a lot by board. CableBox needs working OpenGL (ES)
+through Mesa for its UI, and mpv falls back to software decoding when there's no hardware decoder.
+That can struggle above 720p on current RISC-V CPUs. Tvheadend's `webtv-h264-aac-mpegts` profile,
+or a lower-resolution transcoding profile, helps.
 
 The package creates a `cablebox` system user (groups video, render, input, audio), installs
 the units and a polkit rule that lets that user install updates, manage Wi-Fi and reboot
