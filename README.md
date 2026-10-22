@@ -84,11 +84,11 @@ Tests: `cargo test --workspace`. The read-only D-Bus probe is `cargo run -p sysc
 ## Install from apt
 
 Prebuilt packages for Debian 13 / trixie-based Raspberry Pi OS (amd64, arm64) are published at
-https://ice1man.github.io/iclx-apt/:
+https://apt.icecubelabs.xyz/:
 
 ```sh
-sudo curl -fsSLo /usr/share/keyrings/cablebox.gpg https://ice1man.github.io/iclx-apt/cablebox.gpg
-printf 'Types: deb\nURIs: https://ice1man.github.io/iclx-apt/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\n' \
+sudo curl -fsSLo /usr/share/keyrings/cablebox.gpg https://apt.icecubelabs.xyz/cablebox.gpg
+printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/cablebox.gpg\n' \
   | sudo tee /etc/apt/sources.list.d/cablebox.sources
 sudo apt update && sudo apt install cablebox
 sudo systemctl enable --now cablebox cablebox-cec
