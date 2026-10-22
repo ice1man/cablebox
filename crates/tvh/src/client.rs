@@ -22,9 +22,31 @@ pub enum Error {
     Status(StatusCode),
     #[error("bad response: {0}")]
     Decode(#[from] serde_json::Error),
+    #[error("response larger than {0} bytes")]
+    TooLarge(usize),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Largest API reply we accept (a full lineup's EPG block is a few MB).
+const MAX_API_BYTES: usize = 64 << 20;
+/// Largest icon/other resource we accept.
+const MAX_FETCH_BYTES: usize = 2 << 20;
+
+/// Reads a body, refusing anything over `max` bytes (by Content-Length or while streaming).
+async fn read_capped(mut resp: Response, max: usize) -> Result<Vec<u8>> {
+    if resp.content_length().is_some_and(|n| n > max as u64) {
+        return Err(Error::TooLarge(max));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if body.len() + chunk.len() > max {
+            return Err(Error::TooLarge(max));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Auth {
@@ -49,6 +71,9 @@ impl Client {
         if !base.path().ends_with('/') {
             base.set_path(&format!("{}/", base.path()));
         }
+        // reqwest is built without a bundled TLS provider; use ring (verifies against the
+        // system CA store via rustls-platform-verifier). Errors only mean one is already set.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(20))
@@ -80,7 +105,7 @@ impl Client {
     /// POSTs form parameters to an `/api/...` endpoint and decodes the JSON reply.
     async fn api<T: DeserializeOwned>(&self, path: &str, form: &[(&str, String)]) -> Result<T> {
         let req = self.http.post(self.url(path)?).form(form);
-        let body = self.send(req).await?.bytes().await?;
+        let body = read_capped(self.send(req).await?, MAX_API_BYTES).await?;
         Ok(serde_json::from_slice(&body)?)
     }
 
@@ -185,10 +210,26 @@ impl Client {
         }
     }
 
-    /// Fetches an icon (or any server-relative resource) as raw bytes.
+    /// Whether `u` is on the Tvheadend server itself (same scheme, host and port).
+    pub fn is_same_origin(&self, u: &Url) -> bool {
+        u.scheme() == self.base.scheme()
+            && u.host_str() == self.base.host_str()
+            && u.port_or_known_default() == self.base.port_or_known_default()
+    }
+
+    /// Fetches an icon (or other resource) as raw bytes. Credentials are only sent to the
+    /// Tvheadend server itself, never to external icon hosts.
     pub async fn fetch(&self, url: Url) -> Result<Vec<u8>> {
-        let req = self.http.get(url);
-        Ok(self.send(req).await?.bytes().await?.to_vec())
+        let resp = if self.is_same_origin(&url) {
+            self.send(self.http.get(url)).await?
+        } else {
+            let resp = self.http.get(url).send().await?;
+            if !resp.status().is_success() {
+                return Err(Error::Status(resp.status()));
+            }
+            resp
+        };
+        read_capped(resp, MAX_FETCH_BYTES).await
     }
 
     /// Live stream URL for the player. Credentials are embedded as userinfo, which
@@ -231,6 +272,26 @@ mod tests {
         );
         assert_eq!(c.recording_url("x").as_str(), "http://bob:p%40ss@tv.lan:9981/tvh/dvrfile/x");
         assert_eq!(c.icon_url("imagecache/3").unwrap().as_str(), "http://tv.lan:9981/tvh/imagecache/3");
+    }
+
+    #[test]
+    fn same_origin_matrix() {
+        let c = Client::new("http://tv.lan:9981/tvh", Auth::None).unwrap();
+        let yes = ["http://tv.lan:9981/imagecache/1", "http://tv.lan:9981/other/path"];
+        let no = [
+            "https://tv.lan:9981/imagecache/1", // scheme
+            "http://tv.lan/imagecache/1",       // port (80)
+            "http://evil.example:9981/x.png",   // host
+            "http://tv.lan.evil.example:9981/", // suffix trick
+        ];
+        for u in yes {
+            assert!(c.is_same_origin(&Url::parse(u).unwrap()), "{u}");
+        }
+        for u in no {
+            assert!(!c.is_same_origin(&Url::parse(u).unwrap()), "{u}");
+        }
+        let https = Client::new("https://tv.example", Auth::None).unwrap();
+        assert!(https.is_same_origin(&Url::parse("https://tv.example:443/a").unwrap()));
     }
 
     #[test]
