@@ -134,6 +134,13 @@ pub struct App {
     pub pin_gate: crate::pin::PinGate,
     /// Running as the `cablebox.service` session on a box (not a dev window).
     pub under_service: bool,
+    /// mpv is showing video (between its first frame and stop/end).
+    video_active: bool,
+    /// Next debug log of mpv's frame timing while Smooth motion is on.
+    next_sync_log: Option<Instant>,
+    /// When to next read mpv's measured refresh rate, if the screen didn't report one.
+    measure_refresh_at: Option<Instant>,
+    refresh_probe: crate::display::RefreshProbe,
 }
 
 impl App {
@@ -178,6 +185,10 @@ impl App {
             settings_unlocked: false,
             pin_gate: Default::default(),
             under_service: false,
+            video_active: false,
+            next_sync_log: None,
+            measure_refresh_at: None,
+            refresh_probe: Default::default(),
         }
     }
 
@@ -191,6 +202,7 @@ impl App {
         if let Some(v) = self.cfg.ui.volume {
             let _ = self.player.set_volume(v);
         }
+        self.apply_video_settings();
         // Development only: show the box-only Settings rows in a window to work on their UI.
         // Using them would change this machine (polkit asks for your password first).
         let pretend = std::env::var_os("CABLEBOX_PRETEND_BOX").is_some();
@@ -456,6 +468,50 @@ impl App {
             }
             None => {
                 let _ = self.player.stop();
+                self.set_video_active(false);
+            }
+        }
+    }
+
+    /// Smooth motion and picture quality from Settings → Display.
+    pub fn apply_video_settings(&mut self) {
+        let d = &self.cfg.display;
+        let hz = crate::display::refresh_hz().unwrap_or(60.0);
+        self.player.set_smooth_motion(d.smooth_motion, hz);
+        self.player.set_high_quality(d.quality == crate::config::Quality::High);
+        tracing::info!(
+            "video: smooth motion {} ({hz:.2} Hz), quality {:?}",
+            if d.smooth_motion { "on" } else { "off" },
+            d.quality
+        );
+        self.set_video_active(self.video_active);
+    }
+
+    /// Some screens don't report their refresh rate (Wayland windows); then mpv measures it
+    /// while video is drawn every refresh. Its estimate is noisy, so a rate is only taken
+    /// once it holds steady, and checked again for as long as video plays.
+    fn measure_refresh(&mut self, t: Instant) {
+        if crate::display::refresh_reported() {
+            return;
+        }
+        let due = *self.measure_refresh_at.get_or_insert(t + Duration::from_secs(2));
+        if t < due {
+            return;
+        }
+        self.measure_refresh_at = Some(t + Duration::from_secs(2));
+        let Some(hz) = self.refresh_probe.feed(self.player.estimated_display_fps()) else { return };
+        if crate::display::set_measured_refresh_hz(hz) {
+            tracing::info!("measured refresh: {hz:.2} Hz");
+            self.apply_video_settings();
+        }
+    }
+
+    fn set_video_active(&mut self, on: bool) {
+        self.video_active = on;
+        let every = on && self.cfg.display.smooth_motion;
+        if crate::EVERY_FRAME.swap(every, std::sync::atomic::Ordering::Relaxed) != every && every {
+            if let Some(ui) = self.ui.upgrade() {
+                ui.window().request_redraw();
             }
         }
     }
@@ -463,6 +519,7 @@ impl App {
     pub fn on_player(&mut self, ev: PlayerEvent) {
         match ev {
             PlayerEvent::Playing => {
+                self.set_video_active(true);
                 self.video_status.clear();
                 self.tune_deadline = None;
                 if let Some(hw) = self.player.hwdec_current() {
@@ -470,6 +527,7 @@ impl App {
                 }
             }
             PlayerEvent::Ended { error } => {
+                self.set_video_active(false);
                 if self.playback.is_some() {
                     self.toast("End of recording");
                     self.stop_playback();
@@ -514,6 +572,19 @@ impl App {
     pub fn tick(&mut self) {
         let t = Instant::now();
         let mut dirty = false;
+
+        if self.video_active && self.cfg.display.smooth_motion {
+            let due = *self.next_sync_log.get_or_insert(t + Duration::from_secs(10));
+            if t >= due {
+                tracing::debug!("smooth motion: {}", self.player.sync_stats());
+                self.next_sync_log = Some(t + Duration::from_secs(60));
+            }
+            self.measure_refresh(t);
+        } else {
+            self.next_sync_log = None;
+            self.measure_refresh_at = None;
+            self.refresh_probe = Default::default();
+        }
 
         if let Some(n) = self.entry.tick(t) {
             self.commit_number(n);

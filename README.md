@@ -58,8 +58,8 @@ sudo apt install build-essential pkg-config libmpv-dev libfontconfig-dev libxkbc
 ```
 
 Rust 1.89+ is required (zbus 6). Slint is pinned to 1.14.1, and the workspace uses the
-MSRV-aware resolver. The windowed `winit` backend is a default, development-only feature.
-Packages are built with `--no-default-features --features kms`.
+MSRV-aware resolver. Packages are built with `--no-default-features --features kms,winit`: full
+screen on KMS as a box, a window when started from a desktop. Plain `cargo run` builds only `winit`.
 
 Run against the mock server in a window:
 
@@ -77,7 +77,8 @@ CABLEBOX_CONFIG=/tmp/cb.toml SLINT_BACKEND=winit cargo run -p cablebox
 
 Keyboard: `0-9` `.` channels · arrows / Enter / Esc · `G` guide · `I` info · `M` menu ·
 `D` recordings · `R` record · `F` favorite · PgUp/PgDn channel · Backspace last channel ·
-Space play/pause · `[` `]` rewind/ff · `-` `=` volume · F1–F4 red/green/yellow/blue.
+Space play/pause · `[` `]` rewind/ff · `-` `=` volume · F1–F4 red/green/yellow/blue ·
+F11 full screen (in a window).
 
 Automation: set `CABLEBOX_CONTROL=/path/fifo`, then `echo "guide down down ok" > /path/fifo`.
 Key names are in `RemoteKey::from_name`. This also works over SSH on a device.
@@ -141,6 +142,27 @@ defaults to the screen height ÷ 720. On a box it's set before the KMS backend s
 (`SLINT_SCALE_FACTOR`, from the chosen screen's resolution), and the guide, recordings and Settings
 lists show as many rows as fit. `journalctl -u cablebox | grep -E "screen:|layout:"` shows what
 was chosen.
+
+Video settings, also in `Settings → Display`, apply immediately:
+- **Smooth motion** (off by default) turns on mpv's interpolation with `video-sync=display-resample`.
+  It blends frames to the screen's refresh rate, so 24/30 fps content doesn't judder. The rate is
+  read from the KMS mode (or, in a window, from the monitor), and when a screen doesn't report it
+  mpv's own measurement is used. With it on, CableBox redraws every refresh while video plays, which
+  costs GPU time; run with `RUST_LOG=info,cablebox=debug` to log mistimed/dropped frames. A
+  measured rate well below the screen's (say 100 Hz on a 120 Hz screen) means the GPU can't keep
+  up: use Standard picture quality, or turn Smooth motion off.
+- **Picture quality**: Standard keeps mpv's defaults. High uses `ewa_lanczossharp` scaling and
+  debanding, which looks sharper on big screens but needs a strong GPU. Keep Standard on a Pi.
+
+## Running in a window
+
+Started from a desktop (the **CableBox** menu entry, or `cablebox` in a terminal), CableBox opens in
+a window instead of taking over the screen. F11 toggles full screen. It uses that user's own config
+(`~/.config/cablebox/config.toml`), and the Screen/Resolution settings don't apply. Exit to console
+and the clock settings are only offered on a box. Updates and SSH work, but ask for your password
+through the desktop, since the passwordless polkit rule only covers the `cablebox` user. The remote
+reader is off in a window: keys come from the window. The service always runs full screen (it sets
+`SLINT_BACKEND=linuxkms`), and so does `cablebox` started from a text console.
 
 ## Security
 

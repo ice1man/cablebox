@@ -44,10 +44,23 @@ const PROP_PAUSE: u64 = 1;
 const PROP_TIME_POS: u64 = 2;
 const PROP_DURATION: u64 = 3;
 
+/// Scaler options "High" picture quality changes (mpv's `profile=high-quality` subset).
+const HIGH_QUALITY: &[(&str, &str)] = &[
+    ("scale", "ewa_lanczossharp"),
+    ("cscale", "ewa_lanczossharp"),
+    ("dscale", "mitchell"),
+    ("deband", "yes"),
+    ("sigmoid-upscaling", "yes"),
+    ("correct-downscaling", "yes"),
+    ("linear-downscaling", "yes"),
+];
+
 /// One mpv instance for the lifetime of the app.
 pub struct Player {
     // Leaked on purpose: the render context borrows it and both live until process exit.
     mpv: &'static Mpv,
+    /// mpv's own values for the `HIGH_QUALITY` options, restored for "Standard".
+    standard: Vec<(&'static str, String)>,
 }
 
 impl Player {
@@ -92,7 +105,11 @@ impl Player {
             .spawn(move || event_loop(events, on_event))
             .expect("spawn mpv event thread");
 
-        Ok(Self { mpv })
+        let standard = HIGH_QUALITY
+            .iter()
+            .filter_map(|(name, _)| Some((*name, mpv.get_property::<String>(name).ok()?)))
+            .collect();
+        Ok(Self { mpv, standard })
     }
 
     /// Replaces whatever is playing with `url`.
@@ -140,6 +157,61 @@ impl Player {
         self.mpv.set_property("video-margin-ratio-right", r.right)?;
         self.mpv.set_property("video-margin-ratio-bottom", r.bottom)?;
         Ok(())
+    }
+
+    /// Smooth motion: mpv times frames to the display's refresh (`display_fps`) and blends
+    /// neighbouring frames, so e.g. 24 fps films don't judder on a 60 Hz screen. The renderer
+    /// must then draw every refresh and call `report_swap`. Best-effort, like deinterlacing.
+    pub fn set_smooth_motion(&self, on: bool, display_fps: f64) {
+        let props: &[(&str, String)] = if on {
+            &[
+                ("display-fps-override", format!("{display_fps:.3}")),
+                ("video-sync", "display-resample".into()),
+                ("interpolation", "yes".into()),
+                ("tscale", "oversample".into()),
+            ]
+        } else {
+            &[("interpolation", "no".into()), ("video-sync", "audio".into())]
+        };
+        for (name, value) in props {
+            if let Err(e) = self.mpv.set_property(name, value.as_str()) {
+                tracing::warn!("mpv: {name}={value} not supported ({e})");
+            }
+        }
+    }
+
+    /// "High" picture quality (sharper scaling, debanding; needs a strong GPU) or mpv's defaults.
+    pub fn set_high_quality(&self, on: bool) {
+        let values: Vec<(&str, &str)> = if on {
+            HIGH_QUALITY.to_vec()
+        } else {
+            self.standard.iter().map(|(n, v)| (*n, v.as_str())).collect()
+        };
+        for (name, value) in values {
+            if let Err(e) = self.mpv.set_property(name, value) {
+                tracing::warn!("mpv: {name}={value} not supported ({e})");
+            }
+        }
+    }
+
+    /// The display's refresh rate as mpv measures it from `report_swap` timing (only while
+    /// video plays and the renderer draws every refresh).
+    pub fn estimated_display_fps(&self) -> Option<f64> {
+        self.mpv.get_property::<f64>("estimated-display-fps").ok().filter(|f| *f > 0.0)
+    }
+
+    /// Frame timing summary for logs: sync mode, measured display rate, late and dropped frames.
+    pub fn sync_stats(&self) -> String {
+        let get = |name: &str| self.mpv.get_property::<String>(name).unwrap_or_else(|_| "?".into());
+        format!(
+            "video-sync {}, interpolation {}, display {} Hz (estimated {}), mistimed {}, dropped {}",
+            get("video-sync"),
+            get("interpolation"),
+            get("display-fps"),
+            get("estimated-display-fps"),
+            get("mistimed-frame-count"),
+            get("frame-drop-count"),
+        )
     }
 
     /// Name of the active hardware decoder, or `None` for software decoding.

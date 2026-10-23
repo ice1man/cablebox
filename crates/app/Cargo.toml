@@ -21,14 +21,17 @@ toml = "0.8"
 directories = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+# Reads the screen's refresh rate (already used by Slint's KMS backend).
+drm = "0.14"
 
 [build-dependencies]
 slint-build = "=1.14.1"
 
 [features]
 default = ["winit"]
-# Windowed backend for desktop development. Not shipped in packages.
-winit = ["slint/backend-winit"]
+# Windowed backend: used when started from a desktop (and for development).
+# The winit accessor gives the monitor's refresh rate; it's tied to the pinned Slint.
+winit = ["slint/backend-winit", "slint/unstable-winit-030"]
 # Render straight to KMS/DRM with libinput (production session). Needs libinput-dev, libgbm-dev, libudev-dev.
 kms = ["slint/backend-linuxkms-noseat"]
 
@@ -37,9 +40,9 @@ name = "cablebox"
 maintainer = "ice <ice@icecubelabs.xyz>"
 section = "video"
 priority = "optional"
-# Packages only get the KMS backend; the windowed (winit) backend is for development.
+# Full screen on KMS as a box; a window when started from a desktop.
 default-features = false
-features = ["kms"]
+features = ["kms", "winit"]
 depends = "$auto, packagekit, network-manager, polkitd | policykit-1, adduser, iclx-archive-keyring"
 recommends = "v4l-utils, fonts-dejavu-core"
 extended-description = """\
@@ -52,6 +55,8 @@ assets = [
     ["../../packaging/cablebox.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/cablebox-cec.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/50-cablebox.rules", "usr/share/polkit-1/rules.d/", "644"],
+    ["../../packaging/cablebox.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/cablebox.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["../../README.md", "usr/share/doc/cablebox/", "644"],
 ]
 

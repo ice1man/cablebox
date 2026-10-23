@@ -5,7 +5,7 @@ use sysctl::network::{AccessPointInfo, Status};
 use sysctl::services::State;
 
 use crate::app::{model, App};
-use crate::config::AuthMode;
+use crate::config::{AuthMode, Quality};
 use crate::views::dialog::{Action, Dialog};
 use crate::{AppWindow, MenuItem, Screen};
 
@@ -38,6 +38,8 @@ pub enum Field {
     Hour24,
     Ntp,
     Output,
+    SmoothMotion,
+    Quality,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -305,11 +307,6 @@ impl App {
                     let name = crate::display::label(&c.display.output);
                     if connected { name } else { format!("{name} (not connected)") }
                 };
-                let windowed = std::env::var("SLINT_BACKEND").is_ok_and(|b| b.starts_with("winit"));
-                let in_use = match crate::display::in_use() {
-                    Some(name) if !windowed => crate::display::label(name),
-                    _ => "Window".into(),
-                };
                 let modes = screen_modes(&c.display.output);
                 let mode = c
                     .display
@@ -318,23 +315,40 @@ impl App {
                     .ok()
                     .and_then(|i| modes.get(i).map(|m| format!("{m} (#{i})")))
                     .unwrap_or_else(|| "Auto".into());
-                vec![
-                    Item::new("Screen", screen, Act::Cycle(Field::Output)),
-                    Item::info("Showing on", in_use),
-                    Item::new("Resolution", mode, Act::Cycle(Field::Mode)),
+                let mut v = if crate::display::session() == crate::display::Session::Window {
+                    vec![Item::info("Screen", "Window (F11 for full screen)")]
+                } else {
+                    vec![
+                        Item::new("Screen", screen, Act::Cycle(Field::Output)),
+                        Item::info("Showing on", crate::display::in_use().map(crate::display::label).unwrap_or_else(|| "Default".into())),
+                        Item::new("Resolution", mode, Act::Cycle(Field::Mode)),
+                    ]
+                };
+                v.extend([
                     Item::new(
                         "Interface size",
                         c.display.scale.map(|s| format!("{:.0}%", s * 100.0)).unwrap_or_else(|| "Auto".into()),
                         Act::Cycle(Field::Scale),
                     ),
+                    Item::new("Smooth motion", on_off(c.display.smooth_motion), Act::Cycle(Field::SmoothMotion)),
+                    Item::new(
+                        "Picture quality",
+                        match c.display.quality {
+                            Quality::Standard => "Standard",
+                            Quality::High => "High",
+                        },
+                        Act::Cycle(Field::Quality),
+                    ),
                     Item::new("Restart to apply", "", Act::Do(Action::RestartApp)),
-                ]
+                ]);
+                v
             }
             Page::Remote => vec![
                 Item::new("Remote & HDMI-CEC input", on_off(c.remote.cec), Act::Cycle(Field::Cec)),
                 Item::new("CEC device name", c.remote.cec_name.clone(), Act::Edit(Field::CecName)),
                 Item::info("Keyboard", "0-9 . channels · G guide · I info · M menu · D recordings"),
                 Item::info("", "R record · F favorite · F1-F4 colour keys · Esc back"),
+                Item::info("", "F11 full screen (in a window)"),
             ],
             Page::System => vec![
                 Item::info("Version", env!("CARGO_PKG_VERSION")),
@@ -525,6 +539,13 @@ impl App {
                 // A resolution only makes sense for the screen it was picked on.
                 c.display.mode.clear();
             }
+            Field::SmoothMotion => c.display.smooth_motion = !c.display.smooth_motion,
+            Field::Quality => {
+                c.display.quality = match c.display.quality {
+                    Quality::Standard => Quality::High,
+                    Quality::High => Quality::Standard,
+                }
+            }
             Field::Hour24 => {
                 c.clock.hour24 = !c.clock.hour24;
                 crate::clock::set_hour24(c.clock.hour24);
@@ -543,6 +564,9 @@ impl App {
         }
         if f == Field::Scale {
             crate::apply_scale(&self.ui, self.cfg.display.scale);
+        }
+        if matches!(f, Field::SmoothMotion | Field::Quality) {
+            self.apply_video_settings();
         }
         if f == Field::Cec {
             self.toast("HDMI-CEC change applies after restart");
@@ -676,7 +700,7 @@ impl App {
             Page::Root => ("SETTINGS", "Back or Menu returns to TV."),
             Page::Server => ("TVHEADEND SERVER", "◀ ▶ change options. Changes take effect when you choose Save & reconnect."),
             Page::Network => ("NETWORK", "Choose a Wi-Fi network to connect. Wired connections are used automatically."),
-            Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after CableBox restarts. Auto prefers a TV or monitor over a laptop's built-in screen."),
+            Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after a restart. Smooth motion blends frames to the screen's refresh rate (helps 24 fps films). High picture quality needs a strong GPU; keep Standard on a Raspberry Pi."),
             Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC."),
             Page::System => ("SYSTEM", "Updates are installed from your distribution's package repositories."),
             Page::Clock => ("CLOCK", "◀ ▶ change options. With automatic time off, you can set the date and time yourself."),

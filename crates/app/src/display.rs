@@ -3,12 +3,18 @@
 //! The KMS backend renders on one output, chosen once at startup through
 //! `SLINT_DRM_OUTPUT` (e.g. "HDMI-A-1"). Left alone it takes the first connected output,
 //! which on laptops is the built-in panel, so "Auto" prefers an external screen instead.
+//!
+//! Started from a desktop (Wayland/X11), CableBox opens in a window instead and none of
+//! this applies.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Output {
+    /// GPU device it belongs to: "card0".
+    pub card: String,
     /// Connector name as the KMS backend expects it: "HDMI-A-1", "eDP-1", "DP-2".
     pub name: String,
     pub connected: bool,
@@ -29,8 +35,9 @@ fn outputs_in(dir: &Path) -> Vec<Output> {
         .into_iter()
         .filter_map(|p| {
             let file = p.file_name()?.to_str()?;
-            // "card0-HDMI-A-1" → "HDMI-A-1"
-            let name = file.split_once('-')?.1.to_string();
+            // "card0-HDMI-A-1" → "card0", "HDMI-A-1"
+            let (card, name) = file.split_once('-')?;
+            let (card, name) = (card.to_string(), name.to_string());
             if name.starts_with("Writeback") {
                 return None;
             }
@@ -38,6 +45,7 @@ fn outputs_in(dir: &Path) -> Vec<Output> {
             Some(Output {
                 connected: read("status").trim() == "connected",
                 modes: read("modes").lines().map(str::to_string).collect(),
+                card,
                 name,
             })
         })
@@ -94,8 +102,167 @@ pub fn ui_scale(screen_height: u32, manual: Option<f32>) -> f32 {
     manual.unwrap_or(screen_height as f32 / DESIGN_HEIGHT).clamp(0.5, 4.0)
 }
 
+/// Full screen on KMS (a box, started by the service or from a console) or a desktop window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Session {
+    Tv,
+    Window,
+}
+
+static SESSION: OnceLock<Session> = OnceLock::new();
+
+pub fn session() -> Session {
+    *SESSION.get().unwrap_or(&Session::Tv)
+}
+
+/// Decides between TV and window mode. Must run before the Slint backend starts: without
+/// a desktop it selects the KMS backend explicitly, so the scale set by
+/// `configure_backend` applies.
+pub fn init_session() -> Session {
+    let backend = std::env::var("SLINT_BACKEND").ok();
+    let desktop = ["WAYLAND_DISPLAY", "DISPLAY"].iter().any(|v| std::env::var_os(v).is_some_and(|x| !x.is_empty()));
+    let (session, set_kms) = choose_session(backend.as_deref(), desktop, cfg!(feature = "winit"), cfg!(feature = "kms"));
+    if set_kms {
+        std::env::set_var("SLINT_BACKEND", "linuxkms");
+    }
+    tracing::info!("session: {}", if session == Session::Tv { "TV (full screen)" } else { "window" });
+    *SESSION.get_or_init(|| session)
+}
+
+/// Returns the session and whether to select the KMS backend.
+fn choose_session(backend: Option<&str>, desktop: bool, has_winit: bool, has_kms: bool) -> (Session, bool) {
+    match backend {
+        Some(b) if b.starts_with("linuxkms") => (Session::Tv, false),
+        Some(_) => (Session::Window, false),
+        None if desktop && has_winit => (Session::Window, false),
+        None if has_kms => (Session::Tv, true),
+        None => (Session::Window, false),
+    }
+}
+
 /// What startup decided to render on (for the Display page).
 static IN_USE: OnceLock<Option<String>> = OnceLock::new();
+
+/// Refresh rate of the screen in use in millihertz, 0 until known (Smooth motion needs it).
+/// A window can learn it late or move to another monitor, so it can change.
+static REFRESH_MHZ: AtomicU32 = AtomicU32::new(0);
+/// The rate came from the screen itself rather than from mpv's measurement.
+static REFRESH_REPORTED: AtomicBool = AtomicBool::new(false);
+
+pub fn refresh_hz() -> Option<f64> {
+    let mhz = REFRESH_MHZ.load(Ordering::Relaxed);
+    (mhz != 0).then(|| mhz as f64 / 1000.0)
+}
+
+pub fn refresh_reported() -> bool {
+    REFRESH_REPORTED.load(Ordering::Relaxed)
+}
+
+/// Records the refresh rate the screen reports, if plausible; true when it changed.
+pub fn set_refresh_hz(hz: f64) -> bool {
+    if !(20.0..=500.0).contains(&hz) {
+        return false;
+    }
+    REFRESH_REPORTED.store(true, Ordering::Relaxed);
+    let mhz = (hz * 1000.0).round() as u32;
+    REFRESH_MHZ.swap(mhz, Ordering::Relaxed) != mhz
+}
+
+/// Records a measured rate unless the screen reported one; true when it changed.
+pub fn set_measured_refresh_hz(hz: f64) -> bool {
+    let mhz = (hz * 1000.0).round() as u32;
+    !refresh_reported() && REFRESH_MHZ.swap(mhz, Ordering::Relaxed) != mhz
+}
+
+/// Turns noisy measurements into a rate: the same snapped value `STREAK` times in a row.
+#[derive(Debug, Default)]
+pub struct RefreshProbe {
+    candidate: Option<f64>,
+    streak: u8,
+}
+
+impl RefreshProbe {
+    const STREAK: u8 = 3;
+
+    pub fn feed(&mut self, measured: Option<f64>) -> Option<f64> {
+        let snapped = measured.and_then(snap_refresh);
+        if snapped.is_some() && snapped == self.candidate {
+            self.streak = self.streak.saturating_add(1);
+        } else {
+            self.candidate = snapped;
+            self.streak = u8::from(snapped.is_some());
+        }
+        self.candidate.filter(|_| self.streak >= Self::STREAK)
+    }
+}
+
+/// Nearest common refresh rate to a measured one (measurements read a little low when
+/// frames are missed), or `None` if it isn't within 5% of any.
+pub fn snap_refresh(measured: f64) -> Option<f64> {
+    const RATES: [f64; 17] =
+        [24.0, 25.0, 30.0, 48.0, 50.0, 59.94, 60.0, 72.0, 75.0, 90.0, 100.0, 119.88, 120.0, 144.0, 165.0, 180.0, 240.0];
+    RATES
+        .into_iter()
+        .min_by(|a, b| (a - measured).abs().total_cmp(&(b - measured).abs()))
+        .filter(|r| ((r - measured) / r).abs() <= 0.05)
+}
+
+/// Exact refresh rate from a mode's timings (59.94 rather than the rounded 60).
+fn timings_hz(clock_khz: u32, htotal: u16, vtotal: u16, interlaced: bool, doublescan: bool) -> Option<f64> {
+    if htotal == 0 || vtotal == 0 || clock_khz == 0 {
+        return None;
+    }
+    let mut hz = clock_khz as f64 * 1000.0 / (htotal as f64 * vtotal as f64);
+    if interlaced {
+        hz *= 2.0;
+    }
+    if doublescan {
+        hz /= 2.0;
+    }
+    Some(hz)
+}
+
+/// Opened only to read connector modes (never kept, so it can't hold DRM master).
+struct Card(std::fs::File);
+
+impl std::os::fd::AsFd for Card {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+impl drm::Device for Card {}
+impl drm::control::Device for Card {}
+
+/// Refresh rate of the mode the KMS backend will set on `output`: `mode_index`, or the
+/// same default it picks (the largest preferred mode).
+fn kms_refresh(card: &str, output: &str, mode_index: Option<usize>) -> Option<f64> {
+    use drm::control::{Device, ModeFlags, ModeTypeFlags};
+    let file = std::fs::OpenOptions::new().read(true).write(true).open(Path::new("/dev/dri").join(card)).ok()?;
+    let card = Card(file);
+    let res = card.resource_handles().ok()?;
+    let conn = res
+        .connectors()
+        .iter()
+        .filter_map(|h| card.get_connector(*h, false).ok())
+        .find(|c| format!("{}-{}", c.interface().as_str(), c.interface_id()) == output)?;
+    let modes = conn.modes();
+    let mode = match mode_index {
+        Some(i) => modes.get(i)?,
+        None => modes.iter().max_by_key(|m| {
+            let (w, h) = m.size();
+            (m.mode_type().contains(ModeTypeFlags::PREFERRED), w as u32 * h as u32)
+        })?,
+    };
+    let flags = mode.flags();
+    timings_hz(
+        mode.clock(),
+        mode.hsync().2,
+        mode.vsync().2,
+        flags.contains(ModeFlags::INTERLACE),
+        flags.contains(ModeFlags::DBLSCAN),
+    )
+    .or(Some(mode.vrefresh() as f64))
+}
 
 pub fn in_use() -> Option<&'static str> {
     IN_USE.get().and_then(|o| o.as_deref())
@@ -119,10 +286,12 @@ pub fn configure_backend(saved_output: &str, saved_mode: &str, manual_scale: Opt
         let mode_ok = chosen.as_deref() == Some(saved_output) || saved_output.is_empty();
         // The mode the backend will use: the saved one if valid, else its preferred (first) one.
         let mut mode = mode_list.first().cloned();
+        let mut mode_index = None;
         match saved_mode.parse::<usize>() {
             Ok(i) if mode_ok && i < mode_list.len() && std::env::var_os("SLINT_DRM_MODE").is_none() => {
                 std::env::set_var("SLINT_DRM_MODE", saved_mode);
                 mode = mode_list.get(i).cloned();
+                mode_index = Some(i);
             }
             Ok(i) if i >= mode_list.len() => tracing::warn!("saved resolution #{i} doesn't exist on {name}; using its preferred mode"),
             _ => {}
@@ -131,13 +300,18 @@ pub fn configure_backend(saved_output: &str, saved_mode: &str, manual_scale: Opt
         // The KMS backend only applies a scale given before it starts; setting it here makes
         // the very first layout fill the screen. (Windows keep scaling at runtime.)
         let kms = std::env::var("SLINT_BACKEND").is_ok_and(|b| b.starts_with("linuxkms"));
+        let card = all.iter().find(|o| &o.name == name).map(|o| o.card.as_str()).unwrap_or("card0");
+        if let Some(hz) = kms_refresh(card, name, mode_index) {
+            set_refresh_hz(hz);
+        }
         let height = mode.as_deref().and_then(mode_height);
         if let Some(h) = height {
             let scale = ui_scale(h, manual_scale);
             if kms && std::env::var_os("SLINT_SCALE_FACTOR").is_none() {
                 std::env::set_var("SLINT_SCALE_FACTOR", format!("{scale:.4}"));
             }
-            tracing::info!("screen: {}, {}, scale {scale:.2}", label(name), mode.as_deref().unwrap_or("?"));
+            let hz = refresh_hz().map(|hz| format!(" @ {hz:.2} Hz")).unwrap_or_default();
+            tracing::info!("screen: {}, {}{hz}, scale {scale:.2}", label(name), mode.as_deref().unwrap_or("?"));
         } else {
             tracing::info!("screen: {}", label(name));
         }
@@ -152,7 +326,7 @@ mod tests {
     use super::*;
 
     fn out(name: &str, connected: bool) -> Output {
-        Output { name: name.into(), connected, modes: vec!["1920x1080".into(), "1280x720".into()] }
+        Output { card: "card0".into(), name: name.into(), connected, modes: vec!["1920x1080".into(), "1280x720".into()] }
     }
 
     #[test]
@@ -189,6 +363,54 @@ mod tests {
     }
 
     #[test]
+    fn session_choice() {
+        // The service sets SLINT_BACKEND=linuxkms, even if a desktop is also running.
+        assert_eq!(choose_session(Some("linuxkms"), true, true, true), (Session::Tv, false));
+        assert_eq!(choose_session(Some("linuxkms-femtovg"), false, true, true), (Session::Tv, false));
+        assert_eq!(choose_session(Some("winit"), false, true, true), (Session::Window, false));
+        // Launched from a desktop.
+        assert_eq!(choose_session(None, true, true, true), (Session::Window, false));
+        // From a console: select KMS so the startup scale applies.
+        assert_eq!(choose_session(None, false, true, true), (Session::Tv, true));
+        // Dev build without KMS.
+        assert_eq!(choose_session(None, false, true, false), (Session::Window, false));
+        assert_eq!(choose_session(None, true, false, true), (Session::Tv, true));
+    }
+
+    #[test]
+    fn refresh_from_timings() {
+        // CEA 1080p60 and 1080p59.94.
+        assert!((timings_hz(148500, 2200, 1125, false, false).unwrap() - 60.0).abs() < 0.001);
+        assert!((timings_hz(148352, 2200, 1125, false, false).unwrap() - 59.94).abs() < 0.01);
+        // 1080i: fields per second.
+        assert!((timings_hz(74250, 2200, 1125, true, false).unwrap() - 60.0).abs() < 0.001);
+        assert_eq!(timings_hz(0, 2200, 1125, false, false), None);
+        assert_eq!(timings_hz(148500, 0, 1125, false, false), None);
+    }
+
+    #[test]
+    fn snaps_measured_refresh() {
+        assert_eq!(snap_refresh(117.8), Some(119.88));
+        assert_eq!(snap_refresh(59.2), Some(59.94));
+        assert_eq!(snap_refresh(143.0), Some(144.0));
+        assert_eq!(snap_refresh(49.7), Some(50.0));
+        assert_eq!(snap_refresh(200.0), None);
+        assert_eq!(snap_refresh(10.0), None);
+    }
+
+    #[test]
+    fn probe_needs_a_stable_measurement() {
+        let mut p = RefreshProbe::default();
+        assert_eq!(p.feed(Some(91.0)), None); // early, noisy
+        assert_eq!(p.feed(Some(117.5)), None);
+        assert_eq!(p.feed(Some(118.2)), None);
+        assert_eq!(p.feed(Some(119.0)), Some(119.88));
+        assert_eq!(p.feed(Some(119.4)), Some(119.88));
+        assert_eq!(p.feed(None), None);
+        assert_eq!(p.feed(Some(59.9)), None);
+    }
+
+    #[test]
     fn friendly_labels() {
         assert_eq!(label("eDP-1"), "Built-in screen");
         assert_eq!(label("LVDS-1"), "Built-in screen");
@@ -216,6 +438,7 @@ mod tests {
         let names: Vec<_> = outs.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(names, ["HDMI-A-1", "eDP-1"]);
         assert_eq!(outs[0].modes, ["1920x1080", "1280x720"]);
+        assert_eq!(outs[0].card, "card0");
         assert!(outs.iter().all(|o| o.connected));
     }
 }

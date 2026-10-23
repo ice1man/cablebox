@@ -1,7 +1,7 @@
 //! CableBox: a retro cable-box shell for Tvheadend.
 //!
-//! Run windowed for development (`SLINT_BACKEND=winit`), or as the device's only
-//! session straight on KMS/DRM (`--features kms`, `SLINT_BACKEND=linuxkms`).
+//! Runs as the device's only session straight on KMS/DRM (`--features kms`), or in a
+//! window when started from a desktop (`--features winit`). See `display::init_session`.
 
 mod app;
 mod clock;
@@ -15,6 +15,7 @@ mod views;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,8 +26,13 @@ use slint::{ComponentHandle, GraphicsAPI, PhysicalSize, RenderingState, Timer, T
 
 use crate::app::App;
 use crate::config::Config;
+use crate::display::Session;
 
 slint::include_modules!();
+
+/// Redraw every refresh instead of only when mpv has a new frame (Smooth motion while
+/// video plays: mpv's frame timing needs a render and `report_swap` per vsync).
+pub static EVERY_FRAME: AtomicBool = AtomicBool::new(false);
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -41,7 +47,10 @@ fn main() -> anyhow::Result<()> {
     });
 
     // Must happen before the Slint backend initializes.
-    display::configure_backend(&cfg.display.output, &cfg.display.mode, cfg.display.scale);
+    let session = display::init_session();
+    if session == Session::Tv {
+        display::configure_backend(&cfg.display.output, &cfg.display.mode, cfg.display.scale);
+    }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -58,9 +67,20 @@ fn main() -> anyhow::Result<()> {
         ui.window().set_fullscreen(true);
     }
 
-    ui.on_key(|text| app::with_app(|a| a.on_key_text(&text)).unwrap_or(false));
+    let weak = ui.as_weak();
+    ui.on_key(move |text| {
+        if session == Session::Window && text == slint::SharedString::from(slint::platform::Key::F11) {
+            if let Some(ui) = weak.upgrade() {
+                let w = ui.window();
+                w.set_fullscreen(!w.is_fullscreen());
+            }
+            return true;
+        }
+        app::with_app(|a| a.on_key_text(&text)).unwrap_or(false)
+    });
 
-    if cfg.remote.cec {
+    // In a window the keyboard arrives through the window; don't grab the desktop's devices.
+    if cfg.remote.cec && session == Session::Tv {
         input::remote::spawn(|k| app::post(move |a| a.on_key(k)));
     }
     if let Some(path) = std::env::var_os("CABLEBOX_CONTROL") {
@@ -74,7 +94,12 @@ fn main() -> anyhow::Result<()> {
         app::with_app(|a| a.tick());
     });
     // Start once the window exists so its size (and our scale) is known.
-    Timer::single_shot(Duration::from_millis(50), || {
+    let weak = ui.as_weak();
+    Timer::single_shot(Duration::from_millis(50), move || {
+        if let Some(ui) = weak.upgrade() {
+            window_refresh_rate(&ui);
+        }
+        // Applies Smooth motion with whatever rate is known by now.
         app::with_app(|a| a.start());
     });
 
@@ -124,8 +149,24 @@ fn setup_video_underlay(ui: &AppWindow, player: Arc<Player>, scale: Option<f32>)
                 let w = weak.clone();
                 Timer::single_shot(Duration::ZERO, move || {
                     apply_scale(&w, scale);
-                    app::with_app(|a| a.apply_video_rect());
+                    let new_rate = w.upgrade().is_some_and(|ui| window_refresh_rate(&ui));
+                    app::with_app(|a| {
+                        a.apply_video_rect();
+                        if new_rate {
+                            a.apply_video_settings();
+                        }
+                    });
                 });
+            }
+        }
+        RenderingState::AfterRendering => {
+            if let Some(r) = renderer.borrow().as_ref() {
+                r.report_swap();
+            }
+            if EVERY_FRAME.load(Ordering::Relaxed) {
+                if let Some(ui) = weak.upgrade() {
+                    ui.window().request_redraw();
+                }
             }
         }
         RenderingState::RenderingTeardown => {
@@ -136,6 +177,29 @@ fn setup_video_underlay(ui: &AppWindow, player: Arc<Player>, scale: Option<f32>)
     if let Err(e) = result {
         tracing::error!("cannot attach video renderer: {e}");
     }
+}
+
+/// In a window, the refresh rate comes from the monitor it's on (KMS reads it at startup).
+/// Checked again on every resize: Wayland only reports the monitor once the window is
+/// shown, and the window can move. True when it changed.
+#[cfg(feature = "winit")]
+fn window_refresh_rate(ui: &AppWindow) -> bool {
+    use slint::winit_030::WinitWindowAccessor;
+    if display::session() != Session::Window {
+        return false;
+    }
+    let mhz = ui.window().with_winit_window(|w| w.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
+    let Some(mhz) = mhz.flatten() else { return false };
+    let changed = display::set_refresh_hz(mhz as f64 / 1000.0);
+    if changed {
+        tracing::info!("monitor refresh: {:.2} Hz", mhz as f64 / 1000.0);
+    }
+    changed
+}
+
+#[cfg(not(feature = "winit"))]
+fn window_refresh_rate(_: &AppWindow) -> bool {
+    false
 }
 
 /// Scales the 1280x720 design to the window (or a fixed factor from settings).

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=CableBox
+GenericName=TV Guide
+Comment=Watch live TV and recordings from a Tvheadend server
+Exec=cablebox
+Icon=cablebox
+Terminal=false
+Categories=AudioVideo;Video;TV;Player;
+Keywords=tv;tvheadend;guide;dvr;live;

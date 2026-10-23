@@ -99,6 +99,20 @@ pub struct Display {
     pub mode: String,
     /// Overrides the automatic 720p-based UI scale.
     pub scale: Option<f32>,
+    /// Blend frames to the screen's refresh rate (mpv interpolation).
+    pub smooth_motion: bool,
+    pub quality: Quality,
+}
+
+/// Video scaling quality.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Quality {
+    /// mpv's defaults: fine everywhere, including a Raspberry Pi.
+    #[default]
+    Standard,
+    /// Sharper scaling and debanding for strong GPUs.
+    High,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -181,6 +195,15 @@ mod tests {
         assert_eq!(c.server.profile, "pass");
         assert!(c.remote.cec);
         assert!(c.updates.auto_check);
+        assert!(!c.display.smooth_motion);
+        assert_eq!(c.display.quality, Quality::Standard);
+    }
+
+    #[test]
+    fn video_settings_load() {
+        let c: Config = toml::from_str("[display]\nsmooth_motion = true\nquality = \"high\"\n").unwrap();
+        assert!(c.display.smooth_motion);
+        assert_eq!(c.display.quality, Quality::High);
     }
 
     #[test]

@@ -287,6 +287,15 @@ impl App {
             Action::PowerOff => self.power(false),
             Action::RestartApp => {
                 self.save_config_now();
+                if !self.under_service {
+                    // Nothing restarts a window for us: start a fresh copy in place. By the
+                    // name it was started with, so an updated binary is picked up.
+                    use std::os::unix::process::CommandExt;
+                    let mut args = std::env::args_os();
+                    let exe = args.next().unwrap_or_else(|| "cablebox".into());
+                    let e = std::process::Command::new(exe).args(args).exec();
+                    tracing::error!("restarting CableBox: {e}");
+                }
                 // systemd (Restart=always) brings us back up.
                 std::process::exit(0);
             }
