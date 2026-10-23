@@ -125,7 +125,30 @@ pub fn spans(events: &[EpgEvent], from: i64, to: i64) -> Vec<Span<'_>> {
         t = e.stop;
     }
     push_filler(&mut out, &mut t, to);
+    absorb_slivers(&mut out);
     out
+}
+
+/// Filler shorter than this would be a sliver too thin to see or select. Stations often
+/// start programs a few seconds off the half hour (17:30:01), or let them not quite meet.
+const MIN_FILLER: i64 = 5 * 60;
+
+/// Hands short filler to the following span (or the previous one at the end of a row).
+fn absorb_slivers(spans: &mut Vec<Span<'_>>) {
+    let mut i = 0;
+    while i < spans.len() {
+        let s = spans[i];
+        if s.event.is_some() || s.stop - s.start >= MIN_FILLER || spans.len() == 1 {
+            i += 1;
+            continue;
+        }
+        if i + 1 < spans.len() {
+            spans[i + 1].start = s.start;
+        } else {
+            spans[i - 1].stop = s.stop;
+        }
+        spans.remove(i);
+    }
 }
 
 pub fn span_at<'a>(spans: &[Span<'a>], t: i64) -> Option<Span<'a>> {
@@ -303,6 +326,32 @@ mod tests {
         );
         let (x, w) = place(&s[0], T0);
         assert_eq!((x, w), (0.0, 0.25));
+    }
+
+    #[test]
+    fn programs_a_second_off_the_slot_get_no_slivers() {
+        // :00:01–:30:01, a gap (its filler chunk ends 1 s short of the next program), then
+        // a program ending 2 s before the window does.
+        let mut evs = vec![ev(1, "a", T0 + 1, 30), ev(2, "a", T0 + 3601, 60)];
+        evs[1].stop -= 3;
+        let s = spans(&evs, T0, T0 + SPAN);
+        let shape: Vec<_> = s.iter().map(|s| (s.start - T0, s.stop - T0, s.event.map(|e| e.event_id))).collect();
+        assert_eq!(shape, [(0, 1801, Some(1)), (1801, 3600, None), (3600, 7200, Some(2))]);
+        // The program at the window edge is what the cursor lands on, whole.
+        let nav = GuideNav::open(0, 1, T0 + 60);
+        let sel = nav.selected(&evs).unwrap();
+        assert_eq!((sel.event.unwrap().event_id, sel.start), (1, T0));
+    }
+
+    #[test]
+    fn right_never_stops_on_a_sliver() {
+        let mut evs = vec![ev(1, "a", T0 + 1, 30), ev(2, "a", T0 + 1801, 30), ev(3, "a", T0 + 3601, 30)];
+        evs[0].stop -= 2; // ends 2 s before the next one starts
+        let mut nav = GuideNav::open(0, 1, T0 + 60);
+        nav.right(&evs);
+        assert_eq!(nav.selected(&evs).unwrap().event.unwrap().event_id, 2);
+        nav.right(&evs);
+        assert_eq!(nav.selected(&evs).unwrap().event.unwrap().event_id, 3);
     }
 
     #[test]

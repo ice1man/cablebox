@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/tvh", "crates/player", "crates/input", "crates/sysctl", "crates/app"]
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
