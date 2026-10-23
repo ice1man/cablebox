@@ -232,12 +232,21 @@ impl App {
                                 None if e.dvr_uuid.is_some() => "● SCHEDULED".into(),
                                 None => Default::default(),
                             },
+                            // What OK does; mirrors guide_select() and record_dialog().
+                            hint: if e.start <= t {
+                                "Watch  ·  ● Record".into()
+                            } else if self.dvr_for_event(e).is_some() {
+                                "Cancel recording…".into()
+                            } else {
+                                "Record…".into()
+                            },
                         },
                         None => GuideDetail {
                             title: ch.name.clone().into(),
                             when: fmt_range(sp.start, sp.stop).into(),
                             channel: channel.into(),
                             synopsis: "No program information available.".into(),
+                            hint: if sp.start <= t { "Watch".into() } else { Default::default() },
                             ..Default::default()
                         },
                     },

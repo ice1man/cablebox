@@ -113,6 +113,28 @@ export component GuidePage inherits Rectangle {
                 overflow: elide;
                 vertical-stretch: 1;
             }
+            if root.detail.hint != "": HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Rectangle {
+                    width: ok-label.preferred-width + 12px;
+                    height: 20px;
+                    border-radius: 4px;
+                    background: Theme.focus;
+                    ok-label := Text {
+                        text: "OK";
+                        color: Theme.focus-text;
+                        font-size: 12px;
+                        font-weight: 900;
+                    }
+                }
+                Text {
+                    text: root.detail.hint;
+                    color: Theme.text-dim;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+            }
         }
     }
 
