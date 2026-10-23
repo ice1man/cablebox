@@ -53,6 +53,8 @@ export component AppWindow inherits Window {
     in property <string> menu-title;
     in property <string> menu-hint;
     in property <[MenuItem]> menu-items;
+    in property <bool> menu-more-above;
+    in property <bool> menu-more-below;
 
     // On-screen keyboard
     in property <bool> osk-visible;
@@ -128,6 +130,8 @@ export component AppWindow inherits Window {
         title: root.menu-title;
         hint: root.menu-hint;
         items: root.menu-items;
+        more-above: root.menu-more-above;
+        more-below: root.menu-more-below;
         clock: root.clock;
     }
 

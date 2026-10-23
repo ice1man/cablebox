@@ -112,9 +112,17 @@ impl Default for Updates {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct Clock {
+    /// 24-hour times ("20:05") instead of "8:05 PM".
+    pub hour24: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub server: Server,
     pub ui: Ui,
+    pub clock: Clock,
     pub remote: Remote,
     pub display: Display,
     pub updates: Updates,

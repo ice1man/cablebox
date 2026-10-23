@@ -4,6 +4,7 @@
 //! session straight on KMS/DRM (`--features kms`, `SLINT_BACKEND=linuxkms`).
 
 mod app;
+mod clock;
 mod config;
 mod entry;
 mod guide;

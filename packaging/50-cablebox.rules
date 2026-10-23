@@ -1,4 +1,4 @@
-// Lets the `cablebox` session user install OS updates, manage Wi-Fi and reboot
+// Lets the `cablebox` session user install OS updates, manage Wi-Fi, set the clock and reboot
 // without a password prompt (there is no keyboard to type one on a TV).
 polkit.addRule(function (action, subject) {
     if (subject.user !== "cablebox") {
@@ -15,6 +15,10 @@ polkit.addRule(function (action, subject) {
         "org.freedesktop.NetworkManager.settings.modify.system",
         "org.freedesktop.NetworkManager.wifi.scan",
         "org.freedesktop.NetworkManager.enable-disable-wifi",
+        // Settings → Clock & time zone.
+        "org.freedesktop.timedate1.set-timezone",
+        "org.freedesktop.timedate1.set-ntp",
+        "org.freedesktop.timedate1.set-time",
     ];
     if (allowed.indexOf(action.id) >= 0) {
         return polkit.Result.YES;

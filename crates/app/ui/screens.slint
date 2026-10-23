@@ -177,6 +177,9 @@ export component MenuPage inherits Rectangle {
     in property <string> hint;
     in property <[MenuItem]> items;
     in property <string> clock;
+    // The list is scrolled: more rows exist above / below the visible ones.
+    in property <bool> more-above;
+    in property <bool> more-below;
     background: Theme.panel-dark;
 
     VerticalLayout {
@@ -222,6 +225,20 @@ export component MenuPage inherits Rectangle {
                         }
                     }
                 }
+            }
+            if root.more-above: Text {
+                x: parent.width - self.width - 6px;
+                y: -2px;
+                text: "▲";
+                color: Theme.focus;
+                font-size: 14px;
+            }
+            if root.more-below: Text {
+                x: parent.width - self.width - 6px;
+                y: parent.height - self.height + 2px;
+                text: "▼";
+                color: Theme.focus;
+                font-size: 14px;
             }
         }
 

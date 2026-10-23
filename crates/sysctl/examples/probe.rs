@@ -16,6 +16,14 @@ async fn main() {
         Err(e) => println!("updates: error: {e}"),
     }
     println!("reboot required: {}", sysctl::power::reboot_required());
+    match sysctl::clock::status().await {
+        Ok(c) => println!("clock: {c:?}"),
+        Err(e) => println!("clock: error: {e}"),
+    }
+    match sysctl::clock::list_timezones().await {
+        Ok(z) => println!("time zones: {} (e.g. {})", z.len(), z.iter().take(3).cloned().collect::<Vec<_>>().join(", ")),
+        Err(e) => println!("time zones: error: {e}"),
+    }
     for unit in [sysctl::services::SSH, sysctl::services::CONSOLE, "cablebox.service"] {
         match sysctl::services::state(unit).await {
             Ok(s) => println!("{unit}: {s:?}"),

@@ -66,8 +66,9 @@ pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+/// Time of day in the user's chosen 12/24-hour format.
 pub fn fmt_time(t: i64) -> String {
-    Local.timestamp_opt(t, 0).single().map(|d| d.format("%-I:%M %p").to_string()).unwrap_or_default()
+    crate::clock::format_time(t, crate::clock::hour24())
 }
 
 pub fn fmt_range(start: i64, stop: i64) -> String {
@@ -182,6 +183,7 @@ impl App {
 
     /// First call after install: connect, or run first-time setup.
     pub fn start(&mut self) {
+        crate::clock::set_hour24(self.cfg.clock.hour24);
         if self.cfg.ui.pin.as_deref().is_some_and(|p| !crate::pin::is_valid(p)) {
             tracing::warn!("ignoring invalid settings PIN in config (must be 4 digits)");
             self.cfg.ui.pin = None;
@@ -189,7 +191,16 @@ impl App {
         if let Some(v) = self.cfg.ui.volume {
             let _ = self.player.set_volume(v);
         }
-        self.spawn(sysctl::services::is_main_process_of("cablebox.service"), |a, yes| {
+        // Development only: show the box-only Settings rows in a window to work on their UI.
+        // Using them would change this machine (polkit asks for your password first).
+        let pretend = std::env::var_os("CABLEBOX_PRETEND_BOX").is_some();
+        self.spawn(sysctl::services::is_main_process_of("cablebox.service"), move |a, yes| {
+            if pretend && !yes {
+                tracing::warn!("CABLEBOX_PRETEND_BOX: box-only settings are enabled in this window");
+                a.under_service = true;
+                a.render();
+                return;
+            }
             a.under_service = yes;
             tracing::info!("running as cablebox.service: {yes}");
             if yes {
@@ -635,6 +646,11 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Re-formats the on-screen clock now (e.g. after switching 12/24-hour).
+    pub fn refresh_clock_text(&mut self) {
+        self.clock = fmt_time(now());
     }
 
     pub fn go_live(&mut self) {

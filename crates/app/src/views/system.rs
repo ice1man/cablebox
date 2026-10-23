@@ -349,4 +349,81 @@ impl App {
             }
         });
     }
+
+    // ------------------------------------------------------------ clock
+
+    pub fn refresh_clock(&mut self) {
+        self.spawn(sysctl::clock::status(), |a, r| {
+            match r {
+                Ok(st) => a.menu.clock = Some(st),
+                Err(e) => tracing::warn!("clock status: {e}"),
+            }
+            a.render();
+        });
+    }
+
+    pub fn load_zones(&mut self) {
+        if !self.menu.zones.is_empty() {
+            return;
+        }
+        self.spawn(sysctl::clock::list_timezones(), |a, r| {
+            match r {
+                Ok(z) => {
+                    a.menu.zones = z;
+                    a.select_current_zone_if_open();
+                }
+                Err(e) => a.toast(format!("Couldn't list time zones: {e}")),
+            }
+            a.render();
+        });
+    }
+
+    pub fn set_timezone(&mut self, zone: String) {
+        let fut = {
+            let zone = zone.clone();
+            async move {
+                sysctl::clock::set_timezone(&zone).await?;
+                sysctl::clock::status().await
+            }
+        };
+        self.spawn(fut, move |a, r| {
+            match r {
+                Ok(st) => {
+                    a.menu.clock = Some(st);
+                    a.menu_back_to_clock();
+                    a.toast(format!("Time zone: {}", zone.replace('_', " ")));
+                }
+                Err(e) => a.show_dialog(Dialog::new("Couldn't change the time zone", e.to_string(), vec![("OK", Action::Close)])),
+            }
+            a.render();
+        });
+    }
+
+    pub fn set_ntp(&mut self, on: bool) {
+        let fut = async move {
+            sysctl::clock::set_ntp(on).await?;
+            sysctl::clock::status().await
+        };
+        self.spawn(fut, move |a, r| {
+            match r {
+                Ok(st) => {
+                    a.menu.clock = Some(st);
+                    a.toast(if on { "Automatic time on" } else { "Automatic time off" });
+                }
+                Err(e) => a.show_dialog(Dialog::new("Couldn't change automatic time", e.to_string(), vec![("OK", Action::Close)])),
+            }
+            a.render();
+        });
+    }
+
+    /// Sets the system clock (microseconds since the epoch, UTC).
+    pub fn set_system_time(&mut self, usec: i64) {
+        self.spawn(sysctl::clock::set_time(usec), |a, r| {
+            match r {
+                Ok(()) => a.toast("Date and time set"),
+                Err(e) => a.show_dialog(Dialog::new("Couldn't set the time", e.to_string(), vec![("OK", Action::Close)])),
+            }
+            a.render();
+        });
+    }
 }

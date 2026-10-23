@@ -18,6 +18,9 @@ pub enum Page {
     Display,
     Remote,
     System,
+    Clock,
+    TzRegion,
+    TzCity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +35,8 @@ pub enum Field {
     Scale,
     Mode,
     AutoUpdate,
+    Hour24,
+    Ntp,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +52,9 @@ enum Act {
     Pin,
     Ssh,
     Console,
+    Region(String),
+    Zone(String),
+    SetDateTime,
     Do(Action),
     None,
 }
@@ -77,6 +85,36 @@ pub struct MenuState {
     pub server_info: String,
     /// SSH server state; `None` while checking.
     pub ssh: Option<sysctl::services::State>,
+    /// Time zone / NTP state from timedated; `None` while checking.
+    pub clock: Option<sysctl::clock::Status>,
+    /// All time zones, loaded when the zone picker first opens.
+    pub zones: Vec<String>,
+    /// Region chosen on the zone picker's first page.
+    pub tz_region: String,
+}
+
+/// Rows the settings list shows at once.
+pub const VISIBLE_ROWS: usize = 10;
+
+/// Row to select after paging one screen up or down: the selectable row nearest the
+/// target, preferring rows further in the paging direction.
+fn page_target(sel: usize, n: usize, down: bool, selectable: impl Fn(usize) -> bool) -> Option<usize> {
+    if down {
+        let target = (sel + VISIBLE_ROWS).min(n - 1);
+        (target..n).chain((sel + 1..target).rev()).find(|&i| selectable(i))
+    } else {
+        let target = sel.saturating_sub(VISIBLE_ROWS);
+        (0..=target).rev().chain(target + 1..sel).find(|&i| selectable(i))
+    }
+}
+
+/// First visible row so that `sel` stays in a `rows`-tall window over `len` rows.
+pub fn scroll_window(sel: usize, len: usize, rows: usize) -> usize {
+    if len <= rows {
+        0
+    } else {
+        sel.saturating_sub(rows / 2).min(len - rows)
+    }
 }
 
 impl MenuState {
@@ -151,6 +189,12 @@ impl App {
         match page {
             Page::Network => self.refresh_network(),
             Page::System => self.refresh_ssh(),
+            Page::Clock => self.refresh_clock(),
+            Page::TzRegion => {
+                self.load_zones();
+                self.select_current_zone();
+            }
+            Page::TzCity => self.select_current_zone(),
             Page::Server | Page::Setup => self.menu.server_info.clear(),
             _ => {}
         }
@@ -185,8 +229,31 @@ impl App {
                 Item::new("Network", "", Act::Open(Page::Network)),
                 Item::new("Display", "", Act::Open(Page::Display)),
                 Item::new("Remote control", "", Act::Open(Page::Remote)),
+                Item::new(
+                    "Clock & time zone",
+                    self.menu.clock.as_ref().map(|c| c.timezone.clone()).unwrap_or_default(),
+                    Act::Open(Page::Clock),
+                ),
                 Item::new("System & updates", "", Act::Open(Page::System)),
             ],
+            Page::Clock => self.clock_items(),
+            Page::TzRegion => {
+                if self.menu.zones.is_empty() {
+                    vec![Item::info("Loading time zones…", "")]
+                } else {
+                    crate::clock::regions(&self.menu.zones).into_iter().map(|r| Item::new(r.clone(), "", Act::Region(r))).collect()
+                }
+            }
+            Page::TzCity => {
+                let current = self.menu.clock.as_ref().map(|c| c.timezone.as_str()).unwrap_or("");
+                crate::clock::cities(&self.menu.zones, &self.menu.tz_region)
+                    .into_iter()
+                    .map(|(label, zone)| {
+                        let mark = if zone == current { "Current" } else { "" };
+                        Item::new(label, mark, Act::Zone(zone))
+                    })
+                    .collect()
+            }
             Page::Network => {
                 let mut v = match &self.menu.net {
                     Some(st) => vec![
@@ -275,6 +342,12 @@ impl App {
             *sel = (0..n).find(|&i| selectable(i)).unwrap_or(0);
         }
         match k {
+            RemoteKey::ChannelUp | RemoteKey::ChannelDown | RemoteKey::PageUp | RemoteKey::PageDown => {
+                let down = matches!(k, RemoteKey::ChannelDown | RemoteKey::PageDown);
+                if let Some(i) = page_target(*sel, n, down, selectable) {
+                    *sel = i;
+                }
+            }
             RemoteKey::Up | RemoteKey::Down => {
                 let step = if k == RemoteKey::Up { n - 1 } else { 1 };
                 let mut i = *sel;
@@ -343,6 +416,12 @@ impl App {
                 }
             }
             Act::CheckUpdates => self.check_updates(true),
+            Act::Region(r) => {
+                self.menu.tz_region = r;
+                self.open_page(Page::TzCity);
+            }
+            Act::Zone(z) => self.set_timezone(z),
+            Act::SetDateTime => self.ask_datetime(),
             Act::Ssh => {
                 let on = self.menu.ssh != Some(State::Running);
                 let (title, body, label) = if on {
@@ -405,6 +484,16 @@ impl App {
                 let cur = c.display.mode.parse::<usize>().map(|i| i + 1).unwrap_or(0);
                 let next = step(n, cur);
                 c.display.mode = if next == 0 { String::new() } else { (next - 1).to_string() };
+            }
+            Field::Hour24 => {
+                c.clock.hour24 = !c.clock.hour24;
+                crate::clock::set_hour24(c.clock.hour24);
+                self.refresh_clock_text();
+            }
+            Field::Ntp => {
+                let on = !self.menu.clock.as_ref().is_some_and(|c| c.ntp);
+                self.set_ntp(on);
+                return;
             }
             Field::Url | Field::User | Field::Pass | Field::CecName => return,
         }
@@ -550,12 +639,20 @@ impl App {
             Page::Display => ("DISPLAY", "Resolution changes apply after CableBox restarts."),
             Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC."),
             Page::System => ("SYSTEM", "Updates are installed from your distribution's package repositories."),
+            Page::Clock => ("CLOCK", "◀ ▶ change options. With automatic time off, you can set the date and time yourself."),
+            Page::TzRegion => ("TIME ZONE", "Choose a region. CH+/CH− page through long lists."),
+            Page::TzCity => ("TIME ZONE", "Choose the city closest to you. CH+/CH− page through long lists."),
         };
         ui.set_menu_title(title.into());
         ui.set_menu_hint(hint.into());
+        let first = scroll_window(sel, items.len(), VISIBLE_ROWS);
+        ui.set_menu_more_above(first > 0);
+        ui.set_menu_more_below(first + VISIBLE_ROWS < items.len());
         let rows: Vec<MenuItem> = items
             .into_iter()
             .enumerate()
+            .skip(first)
+            .take(VISIBLE_ROWS)
             .map(|(i, it)| MenuItem {
                 disabled: it.act == Act::None,
                 label: it.label.into(),
@@ -564,5 +661,109 @@ impl App {
             })
             .collect();
         ui.set_menu_items(model(rows));
+    }
+
+    fn clock_items(&self) -> Vec<Item> {
+        let now = crate::app::now();
+        let mut v = vec![
+            Item::info("Now", format!("{}  {}", crate::app::fmt_day(now), crate::app::fmt_time(now))),
+            Item::new(
+                "Time format",
+                if self.cfg.clock.hour24 { "24-hour" } else { "12-hour" },
+                Act::Cycle(Field::Hour24),
+            ),
+        ];
+        let Some(c) = &self.menu.clock else {
+            v.push(Item::info("Time zone", "Checking…"));
+            return v;
+        };
+        // Changing the system clock is only offered on a box, never from a dev window.
+        let on_box = self.under_service;
+        v.push(if on_box {
+            Item::new("Time zone", c.timezone.clone(), Act::Open(Page::TzRegion))
+        } else {
+            Item::info("Time zone", format!("{} · only on a box", c.timezone))
+        });
+        let ntp = match (c.ntp, c.synced) {
+            (true, true) => "On · synchronized",
+            (true, false) => "On · waiting for sync",
+            (false, _) => "Off",
+        };
+        v.push(if on_box && c.can_ntp {
+            Item::new("Automatic time (network)", ntp, Act::Cycle(Field::Ntp))
+        } else if !c.can_ntp {
+            Item::info("Automatic time (network)", "Not available")
+        } else {
+            Item::info("Automatic time (network)", format!("{ntp} · only on a box"))
+        });
+        if on_box && !c.ntp {
+            v.push(Item::new("Set date & time", "", Act::SetDateTime));
+        }
+        v
+    }
+
+    /// After zones load asynchronously, re-select the current one if a picker is open.
+    pub fn select_current_zone_if_open(&mut self) {
+        if matches!(self.menu.page(), Page::TzRegion | Page::TzCity) {
+            self.select_current_zone();
+        }
+    }
+
+    /// Leaves the zone picker after a choice.
+    pub fn menu_back_to_clock(&mut self) {
+        while matches!(self.menu.page(), Page::TzRegion | Page::TzCity) && self.menu.stack.len() > 1 {
+            self.menu.stack.pop();
+        }
+    }
+
+    /// Puts the selection on the current time zone's region or city.
+    fn select_current_zone(&mut self) {
+        let Some(tz) = self.menu.clock.as_ref().map(|c| c.timezone.clone()) else { return };
+        let idx = match self.menu.page() {
+            Page::TzRegion => {
+                let region = tz.split_once('/').map(|(r, _)| r).unwrap_or(crate::clock::OTHER_REGION);
+                crate::clock::regions(&self.menu.zones).iter().position(|r| r == region)
+            }
+            Page::TzCity => crate::clock::cities(&self.menu.zones, &self.menu.tz_region).iter().position(|(_, z)| *z == tz),
+            _ => None,
+        };
+        if let (Some(i), Some(top)) = (idx, self.menu.stack.last_mut()) {
+            top.1 = i;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{page_target, scroll_window};
+
+    #[test]
+    fn paging_moves_one_screen() {
+        let all = |_: usize| true;
+        assert_eq!(page_target(20, 100, true, all), Some(30));
+        assert_eq!(page_target(95, 100, true, all), Some(99));
+        assert_eq!(page_target(20, 100, false, all), Some(10));
+        assert_eq!(page_target(3, 100, false, all), Some(0));
+        // Skips non-selectable rows, preferring further in the paging direction.
+        let not_30 = |i: usize| i != 30;
+        assert_eq!(page_target(20, 100, true, not_30), Some(31));
+        let only_low = |i: usize| i < 25;
+        assert_eq!(page_target(20, 100, true, only_low), Some(24));
+        let not_0 = |i: usize| i != 0;
+        assert_eq!(page_target(5, 100, false, not_0), Some(1));
+    }
+
+    #[test]
+    fn scroll_window_keeps_selection_visible() {
+        assert_eq!(scroll_window(3, 8, 10), 0); // short list: no scrolling
+        assert_eq!(scroll_window(0, 50, 10), 0);
+        assert_eq!(scroll_window(5, 50, 10), 0);
+        assert_eq!(scroll_window(6, 50, 10), 1);
+        assert_eq!(scroll_window(25, 50, 10), 20);
+        assert_eq!(scroll_window(49, 50, 10), 40); // clamps at the end
+        for sel in 0..50 {
+            let first = scroll_window(sel, 50, 10);
+            assert!((first..first + 10).contains(&sel));
+        }
     }
 }

@@ -41,6 +41,18 @@ pub enum PinPurpose {
     New,
     /// …then typing it again.
     Confirm(String),
+    /// Not a PIN: typing the date and time ("YYYYMMDDHHMM") to set the system clock.
+    DateTime,
+}
+
+impl PinPurpose {
+    /// Digits to collect before acting.
+    fn len(&self) -> usize {
+        match self {
+            PinPurpose::DateTime => crate::clock::DATETIME_DIGITS,
+            _ => pin::LEN,
+        }
+    }
 }
 
 pub struct PinPrompt {
@@ -86,9 +98,20 @@ impl Dialog {
             PinPurpose::Unlock(_) => "Enter PIN",
             PinPurpose::New => "Choose a 4-digit PIN",
             PinPurpose::Confirm(_) => "Enter the new PIN again",
+            PinPurpose::DateTime => "Set date & time (24-hour)",
         }
         .into();
-        self.body = format!("{}\n\n{}", pin::mask(&p.entered), p.error);
+        self.body = match p.purpose {
+            PinPurpose::DateTime => {
+                let now = crate::app::now();
+                let reference = chrono::TimeZone::timestamp_opt(&chrono::Local, now, 0)
+                    .single()
+                    .map(|d| d.format("Currently %Y-%m-%d  %H:%M").to_string())
+                    .unwrap_or_default();
+                format!("{}\n\n{}\n{}", crate::clock::datetime_mask(&p.entered), reference, p.error)
+            }
+            _ => format!("{}\n\n{}", pin::mask(&p.entered), p.error),
+        };
     }
 
     pub fn busy(title: impl Into<String>, body: impl Into<String>) -> Self {
@@ -159,6 +182,10 @@ impl App {
         }
     }
 
+    pub fn ask_datetime(&mut self) {
+        self.show_dialog(Dialog::pin(PinPurpose::DateTime));
+    }
+
     pub fn ask_pin(&mut self, purpose: PinPurpose) {
         let mut d = Dialog::pin(purpose);
         if let Some(left) = self.pin_gate.locked(Instant::now()) {
@@ -172,7 +199,7 @@ impl App {
         let Some(d) = &mut self.dialog else { return };
         let Some(p) = &mut d.pin else { return };
         match k {
-            RemoteKey::Digit(n) if p.entered.len() < pin::LEN => {
+            RemoteKey::Digit(n) if p.entered.len() < p.purpose.len() => {
                 p.entered.push(char::from(b'0' + n));
                 p.error.clear();
             }
@@ -185,7 +212,7 @@ impl App {
             }
             _ => return,
         }
-        if p.entered.len() < pin::LEN {
+        if p.entered.len() < p.purpose.len() {
             d.sync_pin();
             return;
         }
@@ -207,6 +234,16 @@ impl App {
                     Check::Locked(left) => {
                         p.error = format!("Too many attempts. Try again in {} s.", left.as_secs());
                     }
+                }
+            }
+            PinPurpose::DateTime => {
+                match crate::clock::parse_datetime(&entered).and_then(crate::clock::local_to_unix_usec) {
+                    Some(usec) => {
+                        self.dialog = None;
+                        self.set_system_time(usec);
+                        return;
+                    }
+                    None => p.error = "That isn't a valid date and time. Try again.".into(),
                 }
             }
             PinPurpose::New => p.purpose = PinPurpose::Confirm(entered),

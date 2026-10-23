@@ -1,6 +1,7 @@
 //! System integration over D-Bus: OS updates (PackageKit), power (logind) and Wi-Fi
 //! (NetworkManager). Privileges come from the polkit rule shipped in `packaging/`.
 
+pub mod clock;
 pub mod network;
 pub mod power;
 pub mod services;

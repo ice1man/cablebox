@@ -11,7 +11,8 @@ Wi-Fi and system updates all happen on screen.
   record from any program, ±24h jumps, and a "now" marker.
 - **DVR**: Upcoming / Recorded / Series tabs, playback with seek, cancel and delete.
 - **Favorites & filters**: favorites plus Tvheadend channel tags, followed by CH+/− and the guide.
-- **Settings**: Tvheadend server, Wi-Fi (NetworkManager), display mode and scale, remote, system.
+- **Settings**: Tvheadend server, Wi-Fi (NetworkManager), display mode and scale, remote,
+  clock (12/24-hour, time zone, automatic network time or set by hand), system.
 - **Updates**: a daily check through PackageKit/apt with a cable-box-style
   *"System Update Available — Install Now / Later"* prompt and a progress bar. It offers a reboot
   when one is needed, and a restart when CableBox updated itself.
@@ -152,6 +153,11 @@ Display: `Settings → Display → Resolution` picks a connector mode (applied t
     in the boot menu) to boot to a normal login. Remove it afterwards.
   The polkit rule allows the `cablebox` user exactly these: start/stop `ssh.service` and start
   `getty@tty1.service`.
+- **Clock** (Settings → Clock & time zone): time zone, network time and setting the clock go through
+  `systemd-timedated` (polkit `org.freedesktop.timedate1.set-timezone`, `set-ntp`, `set-time` for
+  the `cablebox` user). They're only offered when running as `cablebox.service`.
+  `CABLEBOX_PRETEND_BOX=1` shows them in a dev window for UI work, but using them would change
+  that machine.
 - **Sandbox:** `cablebox.service` runs with systemd hardening (`systemd-analyze security`
   exposure 1.8). The `cablebox` user still needs the `input` group so it can read remotes.
 - **Untrusted input limits:** API replies are capped at 64 MiB, logos at 2 MiB and 4096×4096
