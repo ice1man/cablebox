@@ -130,8 +130,14 @@ the units and a polkit rule that lets that user install updates, manage Wi-Fi an
 without a password. The service takes over tty1. Its config lives in
 `/var/lib/cablebox/.config/cablebox/config.toml`, and the first boot shows the setup screen.
 
-Display: `Settings → Display → Resolution` picks a connector mode (applied through
-`SLINT_DRM_MODE` on restart). Interface size defaults to the screen height ÷ 720.
+Display: `Settings → Display`:
+- **Screen** picks which output to use. Auto prefers a TV or monitor (HDMI, DisplayPort, …) over a
+  laptop's built-in panel and falls back to the panel when nothing else is connected.
+- **Resolution** picks one of that screen's modes.
+
+Both apply on restart (through `SLINT_DRM_OUTPUT` and `SLINT_DRM_MODE`). If the chosen screen isn't
+connected at startup, CableBox falls back to Auto instead of failing to start. Interface size
+defaults to the screen height ÷ 720.
 
 ## Security
 

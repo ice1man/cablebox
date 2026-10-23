@@ -6,6 +6,7 @@
 mod app;
 mod clock;
 mod config;
+mod display;
 mod entry;
 mod guide;
 mod lineup;
@@ -42,10 +43,8 @@ fn main() -> anyhow::Result<()> {
         Config::default()
     });
 
-    // Must be set before the Slint backend initializes.
-    if !cfg.display.mode.is_empty() && std::env::var_os("SLINT_DRM_MODE").is_none() {
-        std::env::set_var("SLINT_DRM_MODE", &cfg.display.mode);
-    }
+    // Must happen before the Slint backend initializes.
+    display::configure_backend(&cfg.display.output, &cfg.display.mode);
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)

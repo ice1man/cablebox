@@ -37,6 +37,7 @@ pub enum Field {
     AutoUpdate,
     Hour24,
     Ntp,
+    Output,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,19 +158,11 @@ fn on_off(b: bool) -> &'static str {
     }
 }
 
-/// Display modes of the first connected DRM connector, in the kernel's order
-/// (which is what `SLINT_DRM_MODE` indexes).
-pub fn drm_modes() -> Vec<String> {
-    let Ok(dir) = std::fs::read_dir("/sys/class/drm") else { return Vec::new() };
-    let mut conns: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.join("modes").exists()).collect();
-    conns.sort();
-    for c in conns {
-        if std::fs::read_to_string(c.join("status")).is_ok_and(|s| s.trim() == "connected") {
-            let modes = std::fs::read_to_string(c.join("modes")).unwrap_or_default();
-            return modes.lines().map(str::to_string).collect();
-        }
-    }
-    Vec::new()
+/// Modes of the screen the Display settings refer to: the saved one, or what Auto picks.
+fn screen_modes(saved_output: &str) -> Vec<String> {
+    let outs = crate::display::outputs();
+    let name = crate::display::pick(&outs, saved_output);
+    outs.into_iter().find(|o| Some(&o.name) == name.as_ref()).map(|o| o.modes).unwrap_or_default()
 }
 
 impl App {
@@ -281,7 +274,24 @@ impl App {
                 v
             }
             Page::Display => {
-                let modes = drm_modes();
+                let outs = crate::display::outputs();
+                let auto = crate::display::pick(&outs, "").map(|n| crate::display::label(&n));
+                let screen = if c.display.output.is_empty() {
+                    match auto {
+                        Some(a) => format!("Auto ({a})"),
+                        None => "Auto".into(),
+                    }
+                } else {
+                    let connected = outs.iter().any(|o| o.connected && o.name == c.display.output);
+                    let name = crate::display::label(&c.display.output);
+                    if connected { name } else { format!("{name} (not connected)") }
+                };
+                let windowed = std::env::var("SLINT_BACKEND").is_ok_and(|b| b.starts_with("winit"));
+                let in_use = match crate::display::in_use() {
+                    Some(name) if !windowed => crate::display::label(name),
+                    _ => "Window".into(),
+                };
+                let modes = screen_modes(&c.display.output);
                 let mode = c
                     .display
                     .mode
@@ -290,6 +300,8 @@ impl App {
                     .and_then(|i| modes.get(i).map(|m| format!("{m} (#{i})")))
                     .unwrap_or_else(|| "Auto".into());
                 vec![
+                    Item::new("Screen", screen, Act::Cycle(Field::Output)),
+                    Item::info("Showing on", in_use),
                     Item::new("Resolution", mode, Act::Cycle(Field::Mode)),
                     Item::new(
                         "Interface size",
@@ -480,10 +492,19 @@ impl App {
             }
             Field::Mode => {
                 // "" (auto) followed by each connector mode index.
-                let n = drm_modes().len() + 1;
+                let n = screen_modes(&c.display.output).len() + 1;
                 let cur = c.display.mode.parse::<usize>().map(|i| i + 1).unwrap_or(0);
                 let next = step(n, cur);
                 c.display.mode = if next == 0 { String::new() } else { (next - 1).to_string() };
+            }
+            Field::Output => {
+                // "" (Auto) followed by each connected screen.
+                let mut names = vec![String::new()];
+                names.extend(crate::display::outputs().into_iter().filter(|o| o.connected).map(|o| o.name));
+                let cur = names.iter().position(|n| *n == c.display.output).unwrap_or(0);
+                c.display.output = names[step(names.len(), cur)].clone();
+                // A resolution only makes sense for the screen it was picked on.
+                c.display.mode.clear();
             }
             Field::Hour24 => {
                 c.clock.hour24 = !c.clock.hour24;
@@ -636,7 +657,7 @@ impl App {
             Page::Root => ("SETTINGS", "Back or Menu returns to TV."),
             Page::Server => ("TVHEADEND SERVER", "◀ ▶ change options. Changes take effect when you choose Save & reconnect."),
             Page::Network => ("NETWORK", "Choose a Wi-Fi network to connect. Wired connections are used automatically."),
-            Page::Display => ("DISPLAY", "Resolution changes apply after CableBox restarts."),
+            Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after CableBox restarts. Auto prefers a TV or monitor over a laptop's built-in screen."),
             Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC."),
             Page::System => ("SYSTEM", "Updates are installed from your distribution's package repositories."),
             Page::Clock => ("CLOCK", "◀ ▶ change options. With automatic time off, you can set the date and time yourself."),

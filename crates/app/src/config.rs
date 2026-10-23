@@ -91,7 +91,11 @@ impl Default for Remote {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Display {
-    /// `WIDTHxHEIGHT@HZ` or empty for the connector's preferred mode. Applied on session restart.
+    /// Screen to render on ("HDMI-A-1"); empty = Auto (an external screen if connected,
+    /// otherwise the built-in one). Applied on restart.
+    pub output: String,
+    /// Index into the chosen screen's mode list, or empty for its preferred mode.
+    /// Applied on restart.
     pub mode: String,
     /// Overrides the automatic 720p-based UI scale.
     pub scale: Option<f32>,
