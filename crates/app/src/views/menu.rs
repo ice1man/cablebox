@@ -252,7 +252,7 @@ impl App {
                 Item::new("Restart CableBox", "", Act::Do(Action::RestartApp)),
                 Item::new("Reboot", "", Act::Do(Action::Reboot)),
                 Item::new("Power off", "", Act::Do(Action::PowerOff)),
-                if sysctl::services::running_as_unit("cablebox.service") {
+                if self.under_service {
                     Item::new("Exit to console", "", Act::Console)
                 } else {
                     Item::info("Exit to console", "Only on a box")

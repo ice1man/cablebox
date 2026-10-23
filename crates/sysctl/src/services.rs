@@ -16,6 +16,12 @@ trait Manager {
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
 }
 
+#[proxy(interface = "org.freedesktop.systemd1.Service", default_service = "org.freedesktop.systemd1")]
+trait Service {
+    #[zbus(property, name = "MainPID")]
+    fn main_pid(&self) -> zbus::Result<u32>;
+}
+
 #[proxy(interface = "org.freedesktop.systemd1.Unit", default_service = "org.freedesktop.systemd1")]
 trait Unit {
     #[zbus(property)]
@@ -61,8 +67,16 @@ pub async fn stop(unit: &str) -> Result<()> {
     Ok(())
 }
 
-/// True when this process runs inside the given systemd system unit (e.g. `cablebox.service`).
-pub fn running_as_unit(unit: &str) -> bool {
-    std::fs::read_to_string("/proc/self/cgroup")
-        .is_ok_and(|cg| cg.lines().any(|l| l.ends_with(&format!("/system.slice/{unit}"))))
+/// Main process ID systemd records for a service (0 when it isn't running).
+pub async fn main_pid(unit: &str) -> Result<u32> {
+    let conn = Connection::system().await?;
+    let path = ManagerProxy::new(&conn).await?.load_unit(unit).await?;
+    let service = ServiceProxy::builder(&conn).path(path).build().await?;
+    Ok(service.main_pid().await?)
+}
+
+/// True when this process is the main process of the given system service. Unlike a
+/// cgroup check this survives `PAMName=` moving the process into a logind session scope.
+pub async fn is_main_process_of(unit: &str) -> bool {
+    main_pid(unit).await.is_ok_and(|pid| pid != 0 && pid == std::process::id())
 }

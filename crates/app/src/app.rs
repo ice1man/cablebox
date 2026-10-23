@@ -131,6 +131,8 @@ pub struct App {
     /// The settings PIN was entered; cleared when leaving Settings.
     pub settings_unlocked: bool,
     pub pin_gate: crate::pin::PinGate,
+    /// Running as the `cablebox.service` session on a box (not a dev window).
+    pub under_service: bool,
 }
 
 impl App {
@@ -174,6 +176,7 @@ impl App {
             updates: UpdateState::new(first_check),
             settings_unlocked: false,
             pin_gate: Default::default(),
+            under_service: false,
         }
     }
 
@@ -186,7 +189,14 @@ impl App {
         if let Some(v) = self.cfg.ui.volume {
             let _ = self.player.set_volume(v);
         }
-        self.apply_ssh_preference();
+        self.spawn(sysctl::services::is_main_process_of("cablebox.service"), |a, yes| {
+            a.under_service = yes;
+            tracing::info!("running as cablebox.service: {yes}");
+            if yes {
+                a.apply_ssh_preference();
+            }
+            a.render();
+        });
         if self.cfg.is_configured() {
             self.connect();
         } else {

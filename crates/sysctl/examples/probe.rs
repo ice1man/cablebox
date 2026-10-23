@@ -22,5 +22,8 @@ async fn main() {
             Err(e) => println!("{unit}: error: {e}"),
         }
     }
-    println!("running as cablebox.service: {}", sysctl::services::running_as_unit("cablebox.service"));
+    for unit in ["dbus.service", "cablebox.service"] {
+        println!("{unit} MainPID: {:?}", sysctl::services::main_pid(unit).await.map_err(|e| e.to_string()));
+    }
+    println!("this process is cablebox.service: {}", sysctl::services::is_main_process_of("cablebox.service").await);
 }

@@ -315,12 +315,10 @@ impl App {
         });
     }
 
-    /// Re-applies the SSH choice from Settings at startup (only as the real system service).
+    /// Re-applies the SSH choice from Settings at startup. Only called when running as
+    /// `cablebox.service`, so a development window never touches the desktop's sshd.
     pub fn apply_ssh_preference(&mut self) {
         let Some(on) = self.cfg.remote.ssh else { return };
-        if !services::running_as_unit("cablebox.service") {
-            return;
-        }
         self.spawn(
             async move {
                 match services::state(services::SSH).await? {
