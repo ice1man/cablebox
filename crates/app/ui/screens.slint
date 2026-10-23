@@ -37,6 +37,8 @@ export component DvrPage inherits Rectangle {
     in property <string> detail;
     in property <string> empty-text;
     in property <string> clock;
+    // How many 46px rows (+4px spacing, 8px padding) fit in the list; Rust pages by this.
+    out property <int> rows-fit: max(1, floor((list.height - 12px) / 50px));
     property <[string]> tabs: ["Upcoming", "Recorded", "Series"];
     background: Theme.panel-dark;
 
@@ -72,7 +74,7 @@ export component DvrPage inherits Rectangle {
             }
         }
 
-        Rectangle {
+        list := Rectangle {
             vertical-stretch: 1;
             border-radius: Theme.radius;
             background: Theme.row-alt;
@@ -180,6 +182,8 @@ export component MenuPage inherits Rectangle {
     // The list is scrolled: more rows exist above / below the visible ones.
     in property <bool> more-above;
     in property <bool> more-below;
+    // How many 48px rows (+5px spacing, 10px padding) fit; Rust scrolls by this.
+    out property <int> rows-fit: max(3, floor((menu-list.height - 15px) / 53px));
     background: Theme.panel-dark;
 
     VerticalLayout {
@@ -191,7 +195,7 @@ export component MenuPage inherits Rectangle {
 
         Header { title: root.title; clock: root.clock; }
 
-        Rectangle {
+        menu-list := Rectangle {
             vertical-stretch: 1;
             border-radius: Theme.radius;
             background: Theme.row-alt;

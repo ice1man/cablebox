@@ -764,6 +764,11 @@ impl App {
 
     pub fn render(&mut self) {
         let Some(ui) = self.ui.upgrade() else { return };
+        // How many list rows fit depends on the screen; the UI measures it.
+        let lineup_len = self.lineup.visible_len();
+        self.guide.set_visible(ui.get_guide_rows_fit().max(1) as usize, lineup_len);
+        self.dvr.visible = ui.get_dvr_rows_fit().max(1) as usize;
+        self.menu.visible = ui.get_menu_rows_fit().max(1) as usize;
         ui.set_screen(self.screen);
         ui.set_clock(self.clock.clone().into());
         ui.set_toast(self.toast.clone().into());

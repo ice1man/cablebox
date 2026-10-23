@@ -137,7 +137,10 @@ Display: `Settings → Display`:
 
 Both apply on restart (through `SLINT_DRM_OUTPUT` and `SLINT_DRM_MODE`). If the chosen screen isn't
 connected at startup, CableBox falls back to Auto instead of failing to start. Interface size
-defaults to the screen height ÷ 720.
+defaults to the screen height ÷ 720. On a box it's set before the KMS backend starts
+(`SLINT_SCALE_FACTOR`, from the chosen screen's resolution), and the guide, recordings and Settings
+lists show as many rows as fit. `journalctl -u cablebox | grep -E "screen:|layout:"` shows what
+was chosen.
 
 ## Security
 

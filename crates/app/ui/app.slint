@@ -42,6 +42,9 @@ export component AppWindow inherits Window {
     out property <length> preview-y: guide.preview-y;
     out property <length> preview-w: guide.preview-w;
     out property <length> preview-h: guide.preview-h;
+    out property <int> guide-rows-fit: guide.rows-fit;
+    out property <int> dvr-rows-fit: dvr.rows-fit;
+    out property <int> menu-rows-fit: menu.rows-fit;
 
     // Recordings
     in property <int> dvr-tab;
@@ -118,7 +121,8 @@ export component AppWindow inherits Window {
         clock: root.clock;
     }
 
-    if root.screen == Screen.dvr: DvrPage {
+    dvr := DvrPage {
+        visible: root.screen == Screen.dvr;
         tab: root.dvr-tab;
         items: root.dvr-items;
         detail: root.dvr-detail;
@@ -126,7 +130,8 @@ export component AppWindow inherits Window {
         clock: root.clock;
     }
 
-    if root.screen == Screen.menu: MenuPage {
+    menu := MenuPage {
+        visible: root.screen == Screen.menu;
         title: root.menu-title;
         hint: root.menu-hint;
         items: root.menu-items;

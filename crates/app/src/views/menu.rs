@@ -76,7 +76,7 @@ impl Item {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MenuState {
     /// Page stack with the selected row on each.
     stack: Vec<(Page, usize)>,
@@ -92,19 +92,38 @@ pub struct MenuState {
     pub zones: Vec<String>,
     /// Region chosen on the zone picker's first page.
     pub tz_region: String,
+    /// Rows that fit on screen (from the UI).
+    pub visible: usize,
 }
 
-/// Rows the settings list shows at once.
-pub const VISIBLE_ROWS: usize = 10;
+impl Default for MenuState {
+    fn default() -> Self {
+        Self {
+            stack: Vec::new(),
+            wifi: Vec::new(),
+            scanning: false,
+            net: None,
+            server_info: String::new(),
+            ssh: None,
+            clock: None,
+            zones: Vec::new(),
+            tz_region: String::new(),
+            visible: DEFAULT_VISIBLE_ROWS,
+        }
+    }
+}
+
+/// Rows the settings list shows at the 720-high design size; the UI reports the real number.
+pub const DEFAULT_VISIBLE_ROWS: usize = 10;
 
 /// Row to select after paging one screen up or down: the selectable row nearest the
 /// target, preferring rows further in the paging direction.
-fn page_target(sel: usize, n: usize, down: bool, selectable: impl Fn(usize) -> bool) -> Option<usize> {
+fn page_target(sel: usize, n: usize, rows: usize, down: bool, selectable: impl Fn(usize) -> bool) -> Option<usize> {
     if down {
-        let target = (sel + VISIBLE_ROWS).min(n - 1);
+        let target = (sel + rows).min(n - 1);
         (target..n).chain((sel + 1..target).rev()).find(|&i| selectable(i))
     } else {
-        let target = sel.saturating_sub(VISIBLE_ROWS);
+        let target = sel.saturating_sub(rows);
         (0..=target).rev().chain(target + 1..sel).find(|&i| selectable(i))
     }
 }
@@ -356,7 +375,7 @@ impl App {
         match k {
             RemoteKey::ChannelUp | RemoteKey::ChannelDown | RemoteKey::PageUp | RemoteKey::PageDown => {
                 let down = matches!(k, RemoteKey::ChannelDown | RemoteKey::PageDown);
-                if let Some(i) = page_target(*sel, n, down, selectable) {
+                if let Some(i) = page_target(*sel, n, self.menu.visible, down, selectable) {
                     *sel = i;
                 }
             }
@@ -666,14 +685,15 @@ impl App {
         };
         ui.set_menu_title(title.into());
         ui.set_menu_hint(hint.into());
-        let first = scroll_window(sel, items.len(), VISIBLE_ROWS);
+        let visible = self.menu.visible.max(1);
+        let first = scroll_window(sel, items.len(), visible);
         ui.set_menu_more_above(first > 0);
-        ui.set_menu_more_below(first + VISIBLE_ROWS < items.len());
+        ui.set_menu_more_below(first + visible < items.len());
         let rows: Vec<MenuItem> = items
             .into_iter()
             .enumerate()
             .skip(first)
-            .take(VISIBLE_ROWS)
+            .take(visible)
             .map(|(i, it)| MenuItem {
                 disabled: it.act == Act::None,
                 label: it.label.into(),
@@ -761,17 +781,17 @@ mod tests {
     #[test]
     fn paging_moves_one_screen() {
         let all = |_: usize| true;
-        assert_eq!(page_target(20, 100, true, all), Some(30));
-        assert_eq!(page_target(95, 100, true, all), Some(99));
-        assert_eq!(page_target(20, 100, false, all), Some(10));
-        assert_eq!(page_target(3, 100, false, all), Some(0));
+        assert_eq!(page_target(20, 100, 10, true, all), Some(30));
+        assert_eq!(page_target(95, 100, 10, true, all), Some(99));
+        assert_eq!(page_target(20, 100, 10, false, all), Some(10));
+        assert_eq!(page_target(3, 100, 10, false, all), Some(0));
         // Skips non-selectable rows, preferring further in the paging direction.
         let not_30 = |i: usize| i != 30;
-        assert_eq!(page_target(20, 100, true, not_30), Some(31));
+        assert_eq!(page_target(20, 100, 10, true, not_30), Some(31));
         let only_low = |i: usize| i < 25;
-        assert_eq!(page_target(20, 100, true, only_low), Some(24));
+        assert_eq!(page_target(20, 100, 10, true, only_low), Some(24));
         let not_0 = |i: usize| i != 0;
-        assert_eq!(page_target(5, 100, false, not_0), Some(1));
+        assert_eq!(page_target(5, 100, 10, false, not_0), Some(1));
     }
 
     #[test]

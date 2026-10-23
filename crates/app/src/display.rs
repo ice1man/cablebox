@@ -79,6 +79,21 @@ pub fn pick(outputs: &[Output], saved: &str) -> Option<String> {
         .map(|o| o.name.clone())
 }
 
+/// The UI is laid out for this many logical pixels of height.
+pub const DESIGN_HEIGHT: f32 = 720.0;
+
+/// Height of a mode string such as "1920x1080" (or "1920x1080i").
+pub fn mode_height(mode: &str) -> Option<u32> {
+    let (_, h) = mode.split_once('x')?;
+    h.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok()
+}
+
+/// Scale that fits the 1280x720 design to a screen this many pixels tall, unless a
+/// manual Interface size is set. Clamped to a sane range.
+pub fn ui_scale(screen_height: u32, manual: Option<f32>) -> f32 {
+    manual.unwrap_or(screen_height as f32 / DESIGN_HEIGHT).clamp(0.5, 4.0)
+}
+
 /// What startup decided to render on (for the Display page).
 static IN_USE: OnceLock<Option<String>> = OnceLock::new();
 
@@ -89,7 +104,7 @@ pub fn in_use() -> Option<&'static str> {
 /// Chooses the output and mode before the Slint backend starts, via `SLINT_DRM_OUTPUT`
 /// and `SLINT_DRM_MODE`. Never sets a value the backend would reject (an unplugged output
 /// or a mode index past the end), since that would stop CableBox from starting at all.
-pub fn configure_backend(saved_output: &str, saved_mode: &str) {
+pub fn configure_backend(saved_output: &str, saved_mode: &str, manual_scale: Option<f32>) {
     let all = outputs();
     let chosen = pick(&all, saved_output);
     if !saved_output.is_empty() && chosen.as_deref() != Some(saved_output) {
@@ -100,17 +115,35 @@ pub fn configure_backend(saved_output: &str, saved_mode: &str) {
             std::env::set_var("SLINT_DRM_OUTPUT", name);
         }
         // A saved mode only applies to the screen it was chosen for.
-        let modes = all.iter().find(|o| &o.name == name).map(|o| o.modes.len()).unwrap_or(0);
+        let mode_list = all.iter().find(|o| &o.name == name).map(|o| o.modes.clone()).unwrap_or_default();
         let mode_ok = chosen.as_deref() == Some(saved_output) || saved_output.is_empty();
+        // The mode the backend will use: the saved one if valid, else its preferred (first) one.
+        let mut mode = mode_list.first().cloned();
         match saved_mode.parse::<usize>() {
-            Ok(i) if mode_ok && i < modes && std::env::var_os("SLINT_DRM_MODE").is_none() => {
+            Ok(i) if mode_ok && i < mode_list.len() && std::env::var_os("SLINT_DRM_MODE").is_none() => {
                 std::env::set_var("SLINT_DRM_MODE", saved_mode);
+                mode = mode_list.get(i).cloned();
             }
-            Ok(i) if i >= modes => tracing::warn!("saved resolution #{i} doesn't exist on {name}; using its preferred mode"),
+            Ok(i) if i >= mode_list.len() => tracing::warn!("saved resolution #{i} doesn't exist on {name}; using its preferred mode"),
             _ => {}
         }
+
+        // The KMS backend only applies a scale given before it starts; setting it here makes
+        // the very first layout fill the screen. (Windows keep scaling at runtime.)
+        let kms = std::env::var("SLINT_BACKEND").is_ok_and(|b| b.starts_with("linuxkms"));
+        let height = mode.as_deref().and_then(mode_height);
+        if let Some(h) = height {
+            let scale = ui_scale(h, manual_scale);
+            if kms && std::env::var_os("SLINT_SCALE_FACTOR").is_none() {
+                std::env::set_var("SLINT_SCALE_FACTOR", format!("{scale:.4}"));
+            }
+            tracing::info!("screen: {}, {}, scale {scale:.2}", label(name), mode.as_deref().unwrap_or("?"));
+        } else {
+            tracing::info!("screen: {}", label(name));
+        }
+    } else {
+        tracing::info!("screen: backend default");
     }
-    tracing::info!("screen: {}", chosen.as_deref().map(label).unwrap_or_else(|| "backend default".into()));
     let _ = IN_USE.set(chosen);
 }
 
@@ -139,6 +172,20 @@ mod tests {
         let unplugged = [out("eDP-1", true), out("HDMI-A-1", false)];
         assert_eq!(pick(&unplugged, "HDMI-A-1").as_deref(), Some("eDP-1"));
         assert_eq!(pick(&both, "HDMI-A-9").as_deref(), Some("HDMI-A-1"));
+    }
+
+    #[test]
+    fn scale_from_screen_height() {
+        assert_eq!(ui_scale(1080, None), 1.5);
+        assert_eq!(ui_scale(720, None), 1.0);
+        assert_eq!(ui_scale(2160, None), 3.0);
+        assert!((ui_scale(1504, None) - 2.0889).abs() < 0.001);
+        assert_eq!(ui_scale(1080, Some(1.25)), 1.25);
+        assert_eq!(ui_scale(4320, None), 4.0); // clamped
+        assert_eq!(ui_scale(240, None), 0.5);
+        assert_eq!(mode_height("1920x1080"), Some(1080));
+        assert_eq!(mode_height("1920x1080i"), Some(1080));
+        assert_eq!(mode_height("garbage"), None);
     }
 
     #[test]

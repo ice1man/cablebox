@@ -38,8 +38,12 @@ export component GuidePage inherits Rectangle {
     out property <length> preview-h: 216px;
 
     property <length> label-w: 250px;
-    property <length> row-h: 50px;
     property <length> grid-top: 284px;
+    // Rows fill the space between the time header and the footer: as many 50px rows as
+    // fit, stretched evenly. Rust reads `rows-fit` to know how many channels to show.
+    property <length> rows-space: self.height - self.grid-top - Theme.safe-y - 32px;
+    out property <int> rows-fit: max(3, floor(self.rows-space / 50px));
+    property <length> row-h: max(50px, self.rows-space / self.rows-fit);
     property <length> grid-x: Theme.safe-x + self.label-w;
     property <length> grid-w: self.width - Theme.safe-x * 2 - self.label-w;
 

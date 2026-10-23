@@ -9,8 +9,8 @@ use tvh::EpgEvent;
 pub const SLOT: i64 = 30 * 60;
 /// Visible time span (four columns).
 pub const SPAN: i64 = 4 * SLOT;
-/// Channel rows on screen.
-pub const ROWS: usize = 7;
+/// Channel rows on screen at the 720-high design size; the UI reports the real number.
+pub const DEFAULT_ROWS: usize = 7;
 /// EPG is fetched for all channels in blocks of this size.
 pub const BLOCK: i64 = 6 * 3600;
 const DAY: i64 = 24 * 3600;
@@ -151,13 +151,24 @@ pub struct GuideNav {
     pub row: usize,
     /// Time cursor: the selected span is the one containing it.
     pub anchor: i64,
+    /// Channel rows that fit on screen (from the UI).
+    pub visible: usize,
 }
 
 impl GuideNav {
     pub fn open(row: usize, rows: usize, now: i64) -> Self {
-        let mut nav = Self { start: align(now), top: 0, row, anchor: now };
+        let mut nav = Self { start: align(now), top: 0, row, anchor: now, visible: DEFAULT_ROWS };
         nav.clamp_rows(rows);
         nav
+    }
+
+    /// Adopts a new on-screen row count (e.g. after a scale change), keeping the selection visible.
+    pub fn set_visible(&mut self, visible: usize, rows: usize) {
+        let visible = visible.max(1);
+        if visible != self.visible {
+            self.visible = visible;
+            self.clamp_rows(rows);
+        }
     }
 
     pub fn end(&self) -> i64 {
@@ -173,10 +184,10 @@ impl GuideNav {
         self.row = self.row.min(rows - 1);
         if self.row < self.top {
             self.top = self.row;
-        } else if self.row >= self.top + ROWS {
-            self.top = self.row + 1 - ROWS;
+        } else if self.row >= self.top + self.visible {
+            self.top = self.row + 1 - self.visible;
         }
-        self.top = self.top.min(rows.saturating_sub(ROWS));
+        self.top = self.top.min(rows.saturating_sub(self.visible));
     }
 
     /// Moves `delta` rows, wrapping around the lineup.
@@ -193,8 +204,9 @@ impl GuideNav {
         if rows == 0 {
             return;
         }
-        let row = (self.row as i64 + delta * ROWS as i64).clamp(0, rows as i64 - 1) as usize;
-        self.top = (self.top as i64 + delta * ROWS as i64).clamp(0, rows.saturating_sub(ROWS) as i64) as usize;
+        let page = self.visible as i64;
+        let row = (self.row as i64 + delta * page).clamp(0, rows as i64 - 1) as usize;
+        self.top = (self.top as i64 + delta * page).clamp(0, rows.saturating_sub(self.visible) as i64) as usize;
         self.row = row;
         self.clamp_rows(rows);
     }
@@ -321,6 +333,18 @@ mod tests {
         nav.left(&evs, now); // can't go into the past
         assert_eq!(nav.selected(&evs).unwrap().event.unwrap().event_id, 1);
         assert_eq!(nav.start, T0);
+    }
+
+    #[test]
+    fn row_count_follows_the_screen() {
+        let mut nav = GuideNav::open(15, 40, T0);
+        assert_eq!((nav.row, nav.top), (15, 9));
+        nav.set_visible(12, 40); // taller screen: more rows, selection stays visible
+        assert!((nav.top..nav.top + 12).contains(&15));
+        nav.page(1, 40);
+        assert_eq!(nav.row, 27);
+        nav.set_visible(4, 40);
+        assert!((nav.top..nav.top + 4).contains(&nav.row));
     }
 
     #[test]

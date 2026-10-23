@@ -6,14 +6,16 @@ use input::RemoteKey;
 
 use crate::app::{fmt_day, fmt_range, fmt_time, model, now, App};
 use crate::entry::Entry;
-use crate::guide::{place, spans, GuideNav, ROWS, SLOT, SPAN};
+use crate::guide::{place, spans, GuideNav, SLOT, SPAN};
 use crate::{AppWindow, GuideCell, GuideDetail, GuideRow, Screen};
 
 impl App {
     pub fn open_guide(&mut self) {
         let rows = self.lineup.visible_len();
         let row = self.tuned.as_deref().and_then(|u| self.lineup.visible_position(u)).unwrap_or(0);
+        let visible = self.guide.visible.max(1);
         self.guide = GuideNav::open(row, rows, now());
+        self.guide.set_visible(visible, rows);
         self.entry.cancel();
         self.screen = Screen::Guide;
         self.guide_changed();
@@ -160,7 +162,7 @@ impl App {
         let from = nav.start;
         let end = nav.end();
 
-        let rows: Vec<GuideRow> = (nav.top..(nav.top + ROWS).min(self.lineup.visible_len()))
+        let rows: Vec<GuideRow> = (nav.top..(nav.top + nav.visible).min(self.lineup.visible_len()))
             .filter_map(|pos| self.lineup.visible_at(pos).map(|c| (pos, c)))
             .map(|(pos, ch)| {
                 let evs = self.epg.events(&ch.uuid);

@@ -6,13 +6,22 @@ use crate::app::{fmt_day, fmt_range, model, App};
 use crate::views::dialog::{Action, Dialog};
 use crate::{AppWindow, DvrItem, Screen};
 
-const PAGE: usize = 9;
+/// Rows shown at the 720-high design size; the UI reports the real number.
+const DEFAULT_PAGE: usize = 9;
 const TABS: usize = 3;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DvrState {
     pub tab: usize,
     pub sel: usize,
+    /// Rows that fit on screen (from the UI).
+    pub visible: usize,
+}
+
+impl Default for DvrState {
+    fn default() -> Self {
+        Self { tab: 0, sel: 0, visible: DEFAULT_PAGE }
+    }
 }
 
 impl DvrState {
@@ -23,7 +32,7 @@ impl DvrState {
 
 impl App {
     pub fn open_dvr(&mut self) {
-        self.dvr = DvrState { tab: 1, sel: 0 };
+        self.dvr = DvrState { tab: 1, sel: 0, visible: self.dvr.visible };
         self.screen = Screen::Dvr;
         self.refresh_dvr();
     }
@@ -56,9 +65,9 @@ impl App {
             }
             RemoteKey::Up if len > 0 => self.dvr.sel = (self.dvr.sel + len - 1) % len,
             RemoteKey::Down if len > 0 => self.dvr.sel = (self.dvr.sel + 1) % len,
-            RemoteKey::ChannelUp | RemoteKey::PageUp => self.dvr.sel = self.dvr.sel.saturating_sub(PAGE),
+            RemoteKey::ChannelUp | RemoteKey::PageUp => self.dvr.sel = self.dvr.sel.saturating_sub(self.dvr.visible),
             RemoteKey::ChannelDown | RemoteKey::PageDown => {
-                self.dvr.sel = (self.dvr.sel + PAGE).min(len.saturating_sub(1))
+                self.dvr.sel = (self.dvr.sel + self.dvr.visible).min(len.saturating_sub(1))
             }
             RemoteKey::Ok | RemoteKey::PlayPause => self.dvr_activate(),
             RemoteKey::Red | RemoteKey::Stop => self.dvr_delete(),
@@ -119,7 +128,8 @@ impl App {
 
     pub fn render_dvr(&self, ui: &AppWindow) {
         let sel = self.dvr.sel;
-        let first = sel.saturating_sub(PAGE - 1).min(self.dvr_items_len().saturating_sub(PAGE));
+        let page = self.dvr.visible.max(1);
+        let first = sel.saturating_sub(page - 1).min(self.dvr_items_len().saturating_sub(page));
         let item = |i: usize, e: &tvh::DvrEntry| DvrItem {
             title: e.disp_title.clone().into(),
             subtitle: e.disp_subtitle.clone().unwrap_or_default().into(),
@@ -137,14 +147,14 @@ impl App {
 
         let (items, detail, empty): (Vec<DvrItem>, String, &str) = match self.dvr.tab {
             0 => (
-                self.dvr_upcoming.iter().enumerate().skip(first).take(PAGE).map(|(i, e)| item(i, e)).collect(),
+                self.dvr_upcoming.iter().enumerate().skip(first).take(page).map(|(i, e)| item(i, e)).collect(),
                 self.dvr_upcoming.get(sel).map(entry_detail).unwrap_or_default(),
                 "Nothing scheduled. Press Record on a program in the Guide.",
             ),
             1 => {
                 let fin = self.finished_sorted();
                 (
-                    fin.iter().enumerate().skip(first).take(PAGE).map(|(i, e)| item(i, e)).collect(),
+                    fin.iter().enumerate().skip(first).take(page).map(|(i, e)| item(i, e)).collect(),
                     fin.get(sel).map(|e| entry_detail(e)).unwrap_or_default(),
                     "No recordings yet.",
                 )
@@ -154,7 +164,7 @@ impl App {
                     .iter()
                     .enumerate()
                     .skip(first)
-                    .take(PAGE)
+                    .take(page)
                     .map(|(i, r)| DvrItem {
                         title: rule_name(r).into(),
                         subtitle: if r.enabled { "Enabled".into() } else { "Disabled".into() },

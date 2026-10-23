@@ -28,9 +28,6 @@ use crate::config::Config;
 
 slint::include_modules!();
 
-/// The UI is laid out for a 1280x720 logical canvas.
-const DESIGN_HEIGHT: f32 = 720.0;
-
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -44,7 +41,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // Must happen before the Slint backend initializes.
-    display::configure_backend(&cfg.display.output, &cfg.display.mode);
+    display::configure_backend(&cfg.display.output, &cfg.display.mode, cfg.display.scale);
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -149,9 +146,18 @@ pub fn apply_scale(ui: &slint::Weak<AppWindow>, scale: Option<f32>) {
     if phys.height == 0 {
         return;
     }
-    let s = scale.unwrap_or(phys.height as f32 / DESIGN_HEIGHT).max(0.25);
+    let s = display::ui_scale(phys.height, scale);
     if (w.scale_factor() - s).abs() > 0.001 {
         w.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: s });
         w.dispatch_event(WindowEvent::Resized { size: phys.to_logical(s) });
     }
+    let logical = phys.to_logical(w.scale_factor());
+    tracing::info!(
+        "layout: {}x{} px, scale {:.2} → {:.0}x{:.0}",
+        phys.width,
+        phys.height,
+        w.scale_factor(),
+        logical.width,
+        logical.height
+    );
 }
