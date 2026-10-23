@@ -40,6 +40,53 @@ fn serve(ip: &str, body: Vec<u8>, content_length: bool) -> (String, Arc<Mutex<Ve
     (format!("http://{addr}"), seen)
 }
 
+/// Behaves like Tvheadend: a POST without Content-Length gets the connection closed.
+/// Answers everything else with a serverinfo-style JSON body.
+fn serve_strict() -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let addr = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut post, mut length) = (false, None);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let line = line.trim_end();
+                if line.starts_with("POST ") {
+                    post = true;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse::<usize>().ok();
+                }
+                if line.is_empty() {
+                    break;
+                }
+            }
+            if post && length.is_none() {
+                continue; // drop the connection without answering
+            }
+            let mut body = vec![0; length.unwrap_or(0)];
+            let _ = std::io::Read::read_exact(&mut reader, &mut body);
+            let json = br#"{"sw_version":"4.3-test","api_version":20,"name":"Tvheadend"}"#;
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", json.len());
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(json);
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn empty_form_posts_send_content_length() {
+    let c = Client::new(&serve_strict(), Auth::None).unwrap();
+    let info = c.server_info().await.expect("server_info against a strict server");
+    assert_eq!(info.api_version, 20);
+}
+
 fn basic() -> Auth {
     Auth::Basic { user: "u".into(), pass: "secret".into() }
 }

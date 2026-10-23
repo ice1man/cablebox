@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use diqwest::WithDigestAuth;
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -89,6 +90,22 @@ impl Client {
         Ok(self.base.join(path.trim_start_matches('/'))?)
     }
 
+    /// A form POST with an explicit Content-Length. Tvheadend drops the connection on a POST
+    /// without one, which is what reqwest's `.form()` sends for an empty form.
+    fn post_form(&self, path: &str, form: &[(&str, String)]) -> Result<RequestBuilder> {
+        let mut body = url::form_urlencoded::Serializer::new(String::new());
+        for (k, v) in form {
+            body.append_pair(k, v);
+        }
+        let body = body.finish();
+        Ok(self
+            .http
+            .post(self.url(path)?)
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(CONTENT_LENGTH, body.len())
+            .body(body))
+    }
+
     async fn send(&self, req: RequestBuilder) -> Result<Response> {
         let resp = match &self.auth {
             Auth::None => req.send().await?,
@@ -104,14 +121,14 @@ impl Client {
 
     /// POSTs form parameters to an `/api/...` endpoint and decodes the JSON reply.
     async fn api<T: DeserializeOwned>(&self, path: &str, form: &[(&str, String)]) -> Result<T> {
-        let req = self.http.post(self.url(path)?).form(form);
+        let req = self.post_form(path, form)?;
         let body = read_capped(self.send(req).await?, MAX_API_BYTES).await?;
         Ok(serde_json::from_slice(&body)?)
     }
 
     /// For endpoints whose reply we don't care about (often `{}`).
     async fn api_call(&self, path: &str, form: &[(&str, String)]) -> Result<()> {
-        let req = self.http.post(self.url(path)?).form(form);
+        let req = self.post_form(path, form)?;
         self.send(req).await?;
         Ok(())
     }
@@ -120,11 +137,11 @@ impl Client {
         self.api("api/serverinfo", &[]).await
     }
 
-    /// Enabled channels sorted by number.
+    /// Enabled channels sorted by number; channels without a number come last.
     pub async fn channels(&self) -> Result<Vec<Channel>> {
         let grid: Grid<Channel> = self.api("api/channel/grid", &[("limit", "100000".into())]).await?;
         let mut chans: Vec<_> = grid.entries.into_iter().filter(|c| c.enabled).collect();
-        chans.sort_by(|a, b| a.number.cmp(&b.number).then_with(|| a.name.cmp(&b.name)));
+        sort_channels(&mut chans);
         Ok(chans)
     }
 
@@ -255,6 +272,16 @@ impl Client {
     }
 }
 
+/// Lineup order: by number, unnumbered (0) channels last, then by name.
+fn sort_channels(chans: &mut [Channel]) {
+    chans.sort_by(|a, b| {
+        (a.number.major == 0)
+            .cmp(&(b.number.major == 0))
+            .then(a.number.cmp(&b.number))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +299,22 @@ mod tests {
         );
         assert_eq!(c.recording_url("x").as_str(), "http://bob:p%40ss@tv.lan:9981/tvh/dvrfile/x");
         assert_eq!(c.icon_url("imagecache/3").unwrap().as_str(), "http://tv.lan:9981/tvh/imagecache/3");
+    }
+
+    #[test]
+    fn unnumbered_channels_sort_last() {
+        let ch = |name: &str, major, minor| Channel {
+            uuid: name.into(),
+            enabled: true,
+            name: name.into(),
+            number: crate::ChannelNumber::new(major, minor),
+            icon_public_url: None,
+            tags: vec![],
+        };
+        let mut v = vec![ch("{name-not-set}", 0, 0), ch("b", 5, 2), ch("a", 0, 0), ch("c", 2, 0), ch("d", 5, 1)];
+        sort_channels(&mut v);
+        let order: Vec<_> = v.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(order, ["c", "d", "b", "a", "{name-not-set}"]);
     }
 
     #[test]

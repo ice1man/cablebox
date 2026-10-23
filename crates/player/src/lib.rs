@@ -74,6 +74,11 @@ impl Player {
             Ok(())
         })?;
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
+        // Broadcast TV is often interlaced (1080i). "auto" deinterlaces only interlaced
+        // frames; older mpv only knows yes/no, so this is best-effort.
+        if let Err(e) = mpv.set_property("deinterlace", "auto") {
+            tracing::warn!("mpv: deinterlace=auto not supported ({e}); interlaced video may show combing");
+        }
 
         // No name: libmpv2 6.0's named path passes mpv a pointer to an already-freed
         // CString (use-after-free). With `None` it passes NULL and mpv picks a name.

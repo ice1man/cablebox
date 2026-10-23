@@ -30,6 +30,9 @@ const TOAST_TIME: Duration = Duration::from_secs(3);
 const DVR_REFRESH: Duration = Duration::from_secs(60);
 const RECONNECT_DELAY: Duration = Duration::from_secs(10);
 const RETUNE_DELAY: Duration = Duration::from_secs(5);
+/// How long "Tuning…" may show before we say "No Signal" (the stream stays open and
+/// recovers by itself if the signal comes back).
+const TUNE_TIMEOUT: Duration = Duration::from_secs(15);
 const CONFIG_SAVE_DELAY: Duration = Duration::from_secs(3);
 
 thread_local! {
@@ -110,6 +113,7 @@ pub struct App {
     pub playback: Option<Playback>,
     pub video_status: String,
     retune_at: Option<Instant>,
+    tune_deadline: Option<Instant>,
 
     pub entry: ChannelEntry,
     banner_until: Option<Instant>,
@@ -155,6 +159,7 @@ impl App {
             playback: None,
             video_status: String::new(),
             retune_at: None,
+            tune_deadline: None,
             entry: ChannelEntry::default(),
             banner_until: None,
             toast: String::new(),
@@ -386,6 +391,7 @@ impl App {
         self.playback = None;
         self.retune_at = None;
         self.video_status = "Tuning…".into();
+        self.tune_deadline = Some(Instant::now() + TUNE_TIMEOUT);
         if let Err(e) = self.player.load(url.as_str()) {
             self.video_status = format!("Playback error: {e}");
         }
@@ -437,6 +443,7 @@ impl App {
         match ev {
             PlayerEvent::Playing => {
                 self.video_status.clear();
+                self.tune_deadline = None;
                 if let Some(hw) = self.player.hwdec_current() {
                     tracing::debug!("hardware decoding: {hw}");
                 }
@@ -510,6 +517,14 @@ impl App {
                 self.tuned = None;
                 self.tune(&uuid);
                 self.banner_until = None;
+                dirty = true;
+            }
+        }
+        if self.tune_deadline.is_some_and(|u| t >= u) {
+            self.tune_deadline = None;
+            if self.playback.is_none() && self.video_status == "Tuning…" {
+                tracing::info!("no picture after {TUNE_TIMEOUT:?}; showing No Signal");
+                self.video_status = "No Signal".into();
                 dirty = true;
             }
         }
