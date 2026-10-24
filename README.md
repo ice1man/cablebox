@@ -219,3 +219,12 @@ Not yet implemented:
 - Tvheadend comet push updates (DVR state is polled every 60s).
 - Reminders.
 - Per-channel parental controls (the settings PIN exists).
+
+## License
+
+CableBox is free software: you can redistribute it and/or modify it under the terms of the GNU
+General Public License as published by the Free Software Foundation, either version 2 of the
+License, or (at your option) any later version. See [LICENSE](LICENSE).
+
+The packaged program links Slint, which is used under GPL-3.0, and Apache-2.0 crates, so the
+binaries as a whole are distributed under GPL-3.0 (permitted by "or any later version").
