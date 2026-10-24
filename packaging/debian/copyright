@@ -1,0 +1,28 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: cablebox
+Upstream-Contact: ice <ice@icecubelabs.xyz>
+Source: https://github.com/ice1man/cablebox
+
+Files: *
+Copyright: 2026 ice <ice@icecubelabs.xyz>
+License: GPL-2+
+Comment:
+ The cablebox binary also contains the Rust crates listed with their licenses
+ and notices in /usr/share/doc/cablebox/THIRD-PARTY-LICENSES, including Slint
+ (used under GPL-3.0) and Apache-2.0 crates. The binary as a whole is
+ therefore distributed under GPL-3, as permitted by "any later version".
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in "/usr/share/common-licenses/GPL-2", and version 3
+ in "/usr/share/common-licenses/GPL-3".

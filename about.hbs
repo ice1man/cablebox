@@ -1,0 +1,25 @@
+Third-party software in CableBox
+================================
+
+The cablebox program is built from CableBox's own source (GPL-2.0-or-later) and the
+Rust crates below, which are compiled into it. Their licenses and notices follow.
+System libraries it loads (libmpv, libinput, libgbm, libudev, libxkbcommon and their
+dependencies) come from separate Debian packages with their own copyright files.
+
+Licenses:
+{{#each overview}}
+  {{{name}}}
+{{/each}}
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

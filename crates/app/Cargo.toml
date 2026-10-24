@@ -3,6 +3,7 @@ name = "cablebox"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
 description = "Retro cable-box shell for Tvheadend"
 
@@ -58,6 +59,9 @@ assets = [
     ["../../packaging/cablebox.desktop", "usr/share/applications/", "644"],
     ["../../packaging/cablebox.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["../../README.md", "usr/share/doc/cablebox/", "644"],
+    ["../../packaging/debian/copyright", "usr/share/doc/cablebox/copyright", "644"],
+    # Notices of the crates compiled in; regenerate with tools/third-party-licenses.sh.
+    ["../../packaging/THIRD-PARTY-LICENSES", "usr/share/doc/cablebox/", "644"],
 ]
 
 # Cross builds can't run dpkg-shlibdeps against the target's libraries, so list them

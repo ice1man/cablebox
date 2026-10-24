@@ -107,6 +107,7 @@ To build the packages yourself:
 
 ```sh
 cargo install cargo-deb
+tools/third-party-licenses.sh               # refresh crate notices (cargo install cargo-about --features cli)
 cargo deb -p cablebox                       # amd64, builds with --features kms
 tools/build-cross.sh arm64                  # Raspberry Pi, cross-compiled (see below)
 tools/build-cross.sh riscv64                # RISC-V boards
@@ -228,3 +229,6 @@ License, or (at your option) any later version. See [LICENSE](LICENSE).
 
 The packaged program links Slint, which is used under GPL-3.0, and Apache-2.0 crates, so the
 binaries as a whole are distributed under GPL-3.0 (permitted by "or any later version").
+The licenses and notices of every crate compiled in are in
+[packaging/THIRD-PARTY-LICENSES](packaging/THIRD-PARTY-LICENSES), installed with the package
+in `/usr/share/doc/cablebox/`. Release `X.Y.Z` is built from git tag `vX.Y.Z`.
