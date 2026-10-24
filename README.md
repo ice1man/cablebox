@@ -203,15 +203,15 @@ reader is off in a window: keys come from the window. The service always runs fu
 
 Verified on an x86_64 desktop (winit backend, VAAPI decoding) against the mock server:
 - live TV, channel entry, guide with preview, recording, DVR playback, settings, and the on-screen keyboard;
-- a real PackageKit update check and prompt (install was not exercised).
+- a real PackageKit update check and prompt.
+
+On-screen updates have been installed end to end on a real box through several releases.
 
 Still to verify on hardware:
 - The KMS/DRM session (`--features kms`) on a Pi 5 and an x86 box.
 - mpv GL interop with hwdec on the Pi (`hwdec-current` is logged at debug level).
 - CEC key mapping with real TVs.
 - Whether `/sys/class/drm/*/modes` order matches `SLINT_DRM_MODE` indices.
-- An end-to-end update install and reboot.
-
 - The systemd sandbox with real DRM, audio and remotes. It was tested locally with the
   winit backend under the same seccomp/namespace settings. If something breaks on a box,
   `systemctl edit cablebox` can relax a single setting.
