@@ -32,6 +32,12 @@ pub fn text(s: &Snapshot<'_>) -> String {
                     l += &format!(" → {vf:.2}{why}");
                 }
             }
+            if let Some(codec) = &v.codec {
+                match &v.hwdec {
+                    Some(hw) => l += &format!("  {codec} hw:{hw}"),
+                    None => l += &format!("  {codec} sw"),
+                }
+            }
             l
         }
         None => "IN   no video".into(),
@@ -91,6 +97,8 @@ mod tests {
             vf_fps: Some(vf),
             cache_speed: Some(1_050_000),
             buffered: Some(3.24),
+            codec: Some("h264".into()),
+            hwdec: Some("vaapi".into()),
         }
     }
 
@@ -111,7 +119,7 @@ mod tests {
         };
         assert_eq!(
             text(&s),
-            "IN   1920×1080  29.97 fps → 59.94 (deinterlaced)\n\
+            "IN   1920×1080  29.97 fps → 59.94 (deinterlaced)  h264 hw:vaapi\n\
              OUT  1920×1080 @ 60.00 Hz  59.8 fps drawn\n\
              NET  Wi-Fi \"home\" 72%  192.168.1.20\n\
              STR  10.50.50.235:9981  8.4 Mb/s  buffer 3.2 s"
@@ -120,8 +128,10 @@ mod tests {
 
     #[test]
     fn progressive_video_has_no_arrow() {
-        let s = Snapshot { video: Some(video(59.94, 59.94)), out: (1280, 720), ..Default::default() };
-        assert!(text(&s).starts_with("IN   1920×1080  59.94 fps\nOUT  1280×720  0.0 fps drawn\n"));
+        let mut v = video(59.94, 59.94);
+        v.hwdec = None;
+        let s = Snapshot { video: Some(v), out: (1280, 720), ..Default::default() };
+        assert!(text(&s).starts_with("IN   1920×1080  59.94 fps  h264 sw\nOUT  1280×720  0.0 fps drawn\n"));
     }
 
     #[test]

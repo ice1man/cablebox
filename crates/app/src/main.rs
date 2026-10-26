@@ -125,6 +125,14 @@ fn setup_video_underlay(ui: &AppWindow, player: Arc<Player>, scale: Option<f32>)
                 return;
             };
             // SAFETY: Slint calls this with its GL context current.
+            if let Some(name) = unsafe { gl_renderer_name(get_proc_address) } {
+                display::set_gpu(name);
+                // Hardware acceleration depends on it; apply once the app exists.
+                Timer::single_shot(Duration::ZERO, || {
+                    app::with_app(|a| a.apply_video_settings());
+                });
+            }
+            // SAFETY: as above.
             match unsafe { player.create_gl_renderer(get_proc_address) } {
                 Ok(mut r) => {
                     let w = weak.clone();
@@ -182,6 +190,22 @@ fn setup_video_underlay(ui: &AppWindow, player: Arc<Player>, scale: Option<f32>)
     if let Err(e) = result {
         tracing::error!("cannot attach video renderer: {e}");
     }
+}
+
+/// `GL_RENDERER` of the current context: the GPU and driver, or e.g. "llvmpipe" when Mesa
+/// renders on the CPU.
+///
+/// # Safety
+/// A GL context must be current on this thread.
+unsafe fn gl_renderer_name(get_proc_address: &dyn Fn(&std::ffi::CStr) -> *const std::ffi::c_void) -> Option<String> {
+    const GL_RENDERER: u32 = 0x1F01;
+    let f = get_proc_address(c"glGetString");
+    if f.is_null() {
+        return None;
+    }
+    let get_string = std::mem::transmute::<*const std::ffi::c_void, unsafe extern "system" fn(u32) -> *const u8>(f);
+    let p = get_string(GL_RENDERER);
+    (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p.cast()).to_string_lossy().into_owned())
 }
 
 /// In a window, the refresh rate comes from the monitor it's on (KMS reads it at startup).

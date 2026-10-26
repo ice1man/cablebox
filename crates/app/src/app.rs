@@ -145,6 +145,8 @@ pub struct App {
     debug_at: Option<(Instant, u64)>,
     debug_net: Option<sysctl::network::Status>,
     debug_net_at: Option<Instant>,
+    /// Codec of the last video and its hardware decoder (`None`: decoded in software).
+    pub last_decoder: Option<(String, Option<String>)>,
 }
 
 impl App {
@@ -196,6 +198,7 @@ impl App {
             debug_at: None,
             debug_net: None,
             debug_net_at: None,
+            last_decoder: None,
         }
     }
 
@@ -482,16 +485,37 @@ impl App {
 
     /// Smooth motion and picture quality from Settings → Display.
     pub fn apply_video_settings(&mut self) {
-        let d = &self.cfg.display;
+        let v = self.video_mode();
         let hz = crate::display::refresh_hz().unwrap_or(60.0);
-        self.player.set_smooth_motion(d.smooth_motion, hz);
-        self.player.set_high_quality(d.quality == crate::config::Quality::High);
+        self.player.set_hwdec(v.hwdec);
+        self.player.set_smooth_motion(v.smooth_motion, hz);
+        self.player.set_high_quality(v.quality == crate::config::Quality::High);
         tracing::info!(
-            "video: smooth motion {} ({hz:.2} Hz), quality {:?}",
-            if d.smooth_motion { "on" } else { "off" },
-            d.quality
+            "video: hardware acceleration {}, smooth motion {} ({hz:.2} Hz), quality {:?}",
+            match (self.cfg.display.hw_accel, crate::display::gpu(), crate::display::hw_available()) {
+                (false, ..) => "off",
+                (true, None, _) => "waiting for the GPU",
+                (true, _, true) => "on",
+                (true, _, false) => "not available",
+            },
+            if v.smooth_motion { "on" } else { "off" },
+            v.quality
         );
         self.set_video_active(self.video_active);
+    }
+
+    /// What the player does with the current settings and GPU.
+    pub fn video_mode(&self) -> crate::config::VideoMode {
+        self.cfg.display.effective(crate::display::hw_available())
+    }
+
+    /// Re-reads which decoder the current video uses (after a switch, mpv takes a moment).
+    pub fn refresh_decoder(&mut self) {
+        if self.video_active {
+            if let Some(codec) = self.player.video_codec() {
+                self.last_decoder = Some((codec, self.player.hwdec_current()));
+            }
+        }
     }
 
     /// Some screens don't report their refresh rate (Wayland windows); then mpv measures it
@@ -549,7 +573,7 @@ impl App {
 
     fn set_video_active(&mut self, on: bool) {
         self.video_active = on;
-        let every = on && self.cfg.display.smooth_motion;
+        let every = on && self.video_mode().smooth_motion;
         if crate::EVERY_FRAME.swap(every, std::sync::atomic::Ordering::Relaxed) != every && every {
             if let Some(ui) = self.ui.upgrade() {
                 ui.window().request_redraw();
@@ -563,8 +587,9 @@ impl App {
                 self.set_video_active(true);
                 self.video_status.clear();
                 self.tune_deadline = None;
-                if let Some(hw) = self.player.hwdec_current() {
-                    tracing::debug!("hardware decoding: {hw}");
+                self.refresh_decoder();
+                if let Some((codec, hw)) = &self.last_decoder {
+                    tracing::debug!("decoding {codec}: {}", hw.as_deref().unwrap_or("software"));
                 }
             }
             PlayerEvent::Ended { error } => {
@@ -616,7 +641,7 @@ impl App {
 
         self.update_debug(t);
 
-        if self.video_active && self.cfg.display.smooth_motion {
+        if self.video_active && self.video_mode().smooth_motion {
             let due = *self.next_sync_log.get_or_insert(t + Duration::from_secs(10));
             if t >= due {
                 tracing::debug!("smooth motion: {}", self.player.sync_stats());

@@ -140,6 +140,41 @@ fn choose_session(backend: Option<&str>, desktop: bool, has_winit: bool, has_kms
     }
 }
 
+/// OpenGL's renderer name (`GL_RENDERER`), once the window's GL context exists.
+static GPU: OnceLock<String> = OnceLock::new();
+
+pub fn gpu() -> Option<&'static str> {
+    GPU.get().map(String::as_str)
+}
+
+pub fn set_gpu(name: String) {
+    tracing::info!("gpu: {name}{}", if is_software_renderer(&name) { " (software rendering, no GPU acceleration)" } else { "" });
+    let _ = GPU.set(name);
+}
+
+/// Mesa's CPU rasterizers, used when there's no working GPU driver.
+pub fn is_software_renderer(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["llvmpipe", "softpipe", "swrast", "software rasterizer"].iter().any(|s| n.contains(s))
+}
+
+/// Short form for Settings: "AMD Radeon 760M · radeonsi", "llvmpipe (software)".
+pub fn gpu_label(name: &str) -> String {
+    let (model, rest) = name.split_once(" (").unwrap_or((name, ""));
+    if is_software_renderer(name) {
+        return format!("{model} (software)");
+    }
+    match rest.split([',', ')']).next().map(str::trim).filter(|d| !d.is_empty()) {
+        Some(driver) => format!("{model} · {driver}"),
+        None => model.to_string(),
+    }
+}
+
+/// A real GPU is rendering (unknown counts as no until the GL context is up).
+pub fn hw_available() -> bool {
+    gpu().is_some_and(|g| !is_software_renderer(g))
+}
+
 /// What startup decided to render on (for the Display page).
 static IN_USE: OnceLock<Option<String>> = OnceLock::new();
 
@@ -408,6 +443,19 @@ mod tests {
         assert_eq!(p.feed(Some(119.4)), Some(119.88));
         assert_eq!(p.feed(None), None);
         assert_eq!(p.feed(Some(59.9)), None);
+    }
+
+    #[test]
+    fn software_renderers() {
+        assert!(is_software_renderer("llvmpipe (LLVM 19.1.7, 256 bits)"));
+        assert!(is_software_renderer("softpipe"));
+        assert!(is_software_renderer("Software Rasterizer"));
+        assert!(!is_software_renderer("AMD Radeon Graphics (radeonsi, phoenix, LLVM 19.1.7, DRM 3.64, 6.17.0)"));
+        assert!(!is_software_renderer("V3D 7.1"));
+        assert!(!is_software_renderer("Mesa Intel(R) UHD Graphics 620 (KBL GT2)"));
+        assert_eq!(gpu_label("AMD Radeon 760M (radeonsi, phoenix, LLVM 19.1.7, DRM 3.64)"), "AMD Radeon 760M · radeonsi");
+        assert_eq!(gpu_label("llvmpipe (LLVM 19.1.7, 256 bits)"), "llvmpipe (software)");
+        assert_eq!(gpu_label("V3D 7.1"), "V3D 7.1");
     }
 
     #[test]

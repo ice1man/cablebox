@@ -32,7 +32,7 @@ pub enum PlayerEvent {
 }
 
 /// What's playing and how it's arriving, for the debug overlay.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct VideoInfo {
     pub width: i64,
     pub height: i64,
@@ -44,6 +44,10 @@ pub struct VideoInfo {
     pub cache_speed: Option<i64>,
     /// Seconds of stream buffered ahead.
     pub buffered: Option<f64>,
+    /// Codec name, e.g. "h264" or "mpeg2video".
+    pub codec: Option<String>,
+    /// Hardware decoder in use ("vaapi"), `None` when decoding in software.
+    pub hwdec: Option<String>,
 }
 
 /// Margins around the video as fractions of the output size.
@@ -195,6 +199,19 @@ impl Player {
         }
     }
 
+    /// Hardware video decoding: mpv's safe automatic choice, or always software. Applies to
+    /// the current video right away (mpv re-creates the decoder).
+    pub fn set_hwdec(&self, on: bool) {
+        if let Err(e) = self.mpv.set_property("hwdec", if on { "auto-safe" } else { "no" }) {
+            tracing::warn!("mpv: setting hwdec failed ({e})");
+        }
+    }
+
+    /// Codec of the current video, e.g. "h264".
+    pub fn video_codec(&self) -> Option<String> {
+        self.mpv.get_property::<String>("video-format").ok().filter(|c| !c.is_empty())
+    }
+
     /// "High" picture quality (sharper scaling, debanding; needs a strong GPU) or mpv's defaults.
     pub fn set_high_quality(&self, on: bool) {
         let values: Vec<(&str, &str)> = if on {
@@ -226,6 +243,8 @@ impl Player {
             vf_fps: m.get_property::<f64>("estimated-vf-fps").ok().filter(|f| *f > 0.0),
             cache_speed: m.get_property::<i64>("cache-speed").ok(),
             buffered: m.get_property::<f64>("demuxer-cache-duration").ok(),
+            codec: m.get_property::<String>("video-format").ok().filter(|c| !c.is_empty()),
+            hwdec: self.hwdec_current(),
         })
     }
 

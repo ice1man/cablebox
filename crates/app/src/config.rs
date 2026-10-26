@@ -90,7 +90,7 @@ impl Default for Remote {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Display {
     /// Screen to render on ("HDMI-A-1"); empty = Auto (an external screen if connected,
@@ -104,6 +104,43 @@ pub struct Display {
     /// Blend frames to the screen's refresh rate (mpv interpolation).
     pub smooth_motion: bool,
     pub quality: Quality,
+    /// Use the GPU to decode video, scale it and generate frames.
+    pub hw_accel: bool,
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Self {
+            output: String::new(),
+            mode: String::new(),
+            scale: None,
+            smooth_motion: false,
+            quality: Quality::Standard,
+            hw_accel: true,
+        }
+    }
+}
+
+/// What the player actually does, given the settings and whether there's a real GPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoMode {
+    pub hwdec: bool,
+    pub smooth_motion: bool,
+    pub quality: Quality,
+}
+
+impl Display {
+    /// Without hardware acceleration (switched off, or only a software renderer) video is
+    /// decoded on the CPU and Smooth motion / High quality stay off. The saved choices are
+    /// kept for when it's back.
+    pub fn effective(&self, gpu_ok: bool) -> VideoMode {
+        let hw = self.hw_accel && gpu_ok;
+        VideoMode {
+            hwdec: hw,
+            smooth_motion: hw && self.smooth_motion,
+            quality: if hw { self.quality } else { Quality::Standard },
+        }
+    }
 }
 
 /// Video scaling quality.
@@ -199,6 +236,21 @@ mod tests {
         assert!(c.updates.auto_check);
         assert!(!c.display.smooth_motion);
         assert_eq!(c.display.quality, Quality::Standard);
+    }
+
+    #[test]
+    fn hardware_acceleration_gates_gpu_features() {
+        let mut d = Display { smooth_motion: true, quality: Quality::High, ..Default::default() };
+        assert!(d.hw_accel); // on by default
+        let on = VideoMode { hwdec: true, smooth_motion: true, quality: Quality::High };
+        let off = VideoMode { hwdec: false, smooth_motion: false, quality: Quality::Standard };
+        assert_eq!(d.effective(true), on);
+        assert_eq!(d.effective(false), off); // software renderer
+        d.hw_accel = false;
+        assert_eq!(d.effective(true), off);
+        assert_eq!((d.smooth_motion, d.quality), (true, Quality::High)); // choices kept
+        let c: Config = toml::from_str("[display]\nsmooth_motion = true\n").unwrap();
+        assert!(c.display.hw_accel); // configs from before the switch
     }
 
     #[test]

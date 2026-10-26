@@ -41,6 +41,7 @@ pub enum Field {
     SmoothMotion,
     Quality,
     DebugOverlay,
+    HwAccel,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,17 +332,38 @@ impl App {
                         c.display.scale.map(|s| format!("{:.0}%", s * 100.0)).unwrap_or_else(|| "Auto".into()),
                         Act::Cycle(Field::Scale),
                     ),
-                    Item::new("Smooth motion", on_off(c.display.smooth_motion), Act::Cycle(Field::SmoothMotion)),
-                    Item::new(
-                        "Picture quality",
-                        match c.display.quality {
-                            Quality::Standard => "Standard",
-                            Quality::High => "High",
-                        },
-                        Act::Cycle(Field::Quality),
-                    ),
-                    Item::new("Restart to apply", "", Act::Do(Action::RestartApp)),
                 ]);
+                // Smooth motion and High quality run on the GPU; without it they're locked.
+                let gpu_ok = crate::display::hw_available();
+                let starting = crate::display::gpu().is_none();
+                let locked = match (c.display.hw_accel, gpu_ok) {
+                    (true, true) => None,
+                    (false, _) => Some("Needs hardware acceleration"),
+                    (true, false) if starting => Some("Starting…"),
+                    (true, false) => Some("Hardware not available"),
+                };
+                let hw = match (c.display.hw_accel, gpu_ok, &self.last_decoder) {
+                    (false, ..) => "Off".to_string(),
+                    (true, false, _) if starting => "Starting…".into(),
+                    (true, false, _) => "Hardware not available".into(),
+                    (true, true, Some((_, Some(dec)))) => format!("On · {dec}"),
+                    (true, true, Some((codec, None))) => format!("On · {codec} decoded in software"),
+                    (true, true, None) => "On".into(),
+                };
+                v.push(Item::new("Hardware acceleration", hw, Act::Cycle(Field::HwAccel)));
+                v.push(Item::info("Graphics", crate::display::gpu().map(crate::display::gpu_label).unwrap_or_else(|| "Starting…".into())));
+                let quality = match c.display.quality {
+                    Quality::Standard => "Standard",
+                    Quality::High => "High",
+                };
+                match locked {
+                    None => v.extend([
+                        Item::new("Smooth motion", on_off(c.display.smooth_motion), Act::Cycle(Field::SmoothMotion)),
+                        Item::new("Picture quality", quality, Act::Cycle(Field::Quality)),
+                    ]),
+                    Some(why) => v.extend([Item::info("Smooth motion", why), Item::info("Picture quality", why)]),
+                }
+                v.push(Item::new("Restart to apply", "", Act::Do(Action::RestartApp)));
                 v
             }
             Page::Remote => vec![
@@ -543,6 +565,7 @@ impl App {
                 c.display.mode.clear();
             }
             Field::SmoothMotion => c.display.smooth_motion = !c.display.smooth_motion,
+            Field::HwAccel => c.display.hw_accel = !c.display.hw_accel,
             Field::Quality => {
                 c.display.quality = match c.display.quality {
                     Quality::Standard => Quality::High,
@@ -568,8 +591,17 @@ impl App {
         if f == Field::Scale {
             crate::apply_scale(&self.ui, self.cfg.display.scale);
         }
-        if matches!(f, Field::SmoothMotion | Field::Quality) {
+        if matches!(f, Field::SmoothMotion | Field::Quality | Field::HwAccel) {
             self.apply_video_settings();
+        }
+        if f == Field::HwAccel {
+            // mpv re-creates the decoder; show the result once it has.
+            slint::Timer::single_shot(std::time::Duration::from_millis(1500), || {
+                crate::app::with_app(|a| {
+                    a.refresh_decoder();
+                    a.render();
+                });
+            });
         }
         if f == Field::DebugOverlay {
             self.update_debug(std::time::Instant::now());
@@ -706,7 +738,7 @@ impl App {
             Page::Root => ("SETTINGS", "Back or Menu returns to TV."),
             Page::Server => ("TVHEADEND SERVER", "◀ ▶ change options. Changes take effect when you choose Save & reconnect."),
             Page::Network => ("NETWORK", "Choose a Wi-Fi network to connect. Wired connections are used automatically."),
-            Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after a restart. Smooth motion blends frames to the screen's refresh rate (helps 24 fps films). High picture quality needs a strong GPU; keep Standard on a Raspberry Pi."),
+            Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after a restart. Hardware acceleration uses the GPU to decode video, scale it and generate frames. Smooth motion blends frames to the screen's refresh rate (helps 24 fps films). High picture quality needs a strong GPU; keep Standard on a Raspberry Pi."),
             Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC."),
             Page::System => ("SYSTEM", "Updates are installed from your distribution's package repositories."),
             Page::Clock => ("CLOCK", "◀ ▶ change options. With automatic time off, you can set the date and time yourself."),

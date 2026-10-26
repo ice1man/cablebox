@@ -145,6 +145,13 @@ lists show as many rows as fit. `journalctl -u cablebox | grep -E "screen:|layou
 was chosen.
 
 Video settings, also in `Settings → Display`, apply immediately:
+- **Hardware acceleration** (on by default) lets the GPU decode video (mpv `hwdec=auto-safe`),
+  scale it and generate frames. The row shows the decoder in use (`On · vaapi`), or that the
+  channel's codec is decoded in software. Many GPUs can't decode MPEG-2, which most over-the-air
+  ATSC channels use. **Graphics** shows the OpenGL renderer. When it's a software rasterizer
+  (Mesa llvmpipe, common on boards without GPU drivers), the row says *Hardware not available*.
+  Smooth motion and High quality then stay off, since they'd run on the CPU. Switching it off
+  does the same, and keeps your choices for when it's back on.
 - **Smooth motion** (off by default) turns on mpv's interpolation with `video-sync=display-resample`.
   It blends frames to the screen's refresh rate, so 24/30 fps content doesn't judder. The rate is
   read from the KMS mode (or, in a window, from the monitor), and when a screen doesn't report it
