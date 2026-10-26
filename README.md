@@ -91,6 +91,7 @@ Prebuilt packages for Debian 13 / trixie-based Raspberry Pi OS (amd64, arm64, ri
 in the ICLX apt repository, https://apt.icecubelabs.xyz/:
 
 ```sh
+sudo apt install curl
 sudo curl -fsSLo /usr/share/keyrings/iclx-archive-keyring.gpg https://apt.icecubelabs.xyz/iclx-archive-keyring.gpg
 printf 'Types: deb\nURIs: https://apt.icecubelabs.xyz/\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/iclx-archive-keyring.gpg\nArchitectures: amd64 arm64 riscv64\n' \
   | sudo tee /etc/apt/sources.list.d/iclx.sources
