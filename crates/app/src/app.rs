@@ -499,12 +499,14 @@ impl App {
     /// Smooth motion and picture quality from Settings → Display.
     pub fn apply_video_settings(&mut self) {
         let v = self.video_mode();
+        crate::display::set_frame_divisor(self.cfg.display.refresh_divisor);
         let hz = crate::display::refresh_hz().unwrap_or(60.0);
         self.player.set_hwdec(v.hwdec);
         self.player.set_smooth_motion(v.smooth_motion, hz);
+        self.apply_frame_cap();
         self.player.set_high_quality(v.quality == crate::config::Quality::High);
         tracing::info!(
-            "video: hardware acceleration {}, smooth motion {} ({hz:.2} Hz), quality {:?}",
+            "video: hardware acceleration {}, smooth motion {}, refresh target {:.2} Hz, quality {:?}",
             match (self.cfg.display.hw_accel, crate::display::gpu(), crate::display::hw_available()) {
                 (false, ..) => "off",
                 (true, None, _) => "waiting for the GPU",
@@ -512,6 +514,7 @@ impl App {
                 (true, _, false) => "not available",
             },
             if v.smooth_motion { "on" } else { "off" },
+            crate::display::target_hz(),
             v.quality
         );
         self.set_video_active(self.video_active);
@@ -581,6 +584,17 @@ impl App {
         }
     }
 
+    /// Refresh target without Smooth motion: thin the video to the target when it's slower
+    /// than the video. (With Smooth motion mpv already draws at the target.) Re-checked when
+    /// a video starts, since that's when its frame rate is known.
+    fn apply_frame_cap(&mut self) {
+        let cap = if self.video_mode().smooth_motion { None } else { crate::display::frame_cap(self.player.video_fps()) };
+        self.player.set_frame_cap(cap);
+        if let Some(fps) = cap {
+            tracing::debug!("refresh target: video thinned to {fps:.2} fps");
+        }
+    }
+
     /// What the player does with the current settings and GPU.
     pub fn video_mode(&self) -> crate::config::VideoMode {
         self.cfg.display.effective(crate::display::hw_available())
@@ -642,6 +656,7 @@ impl App {
             audio: self.player.audio_info(),
             out: (size.width, size.height),
             refresh_hz: crate::display::refresh_hz(),
+            divisor: crate::display::frame_divisor(),
             drawn_fps,
             net: self.debug_net.as_ref(),
             server: &self.cfg.server.url,
@@ -666,6 +681,7 @@ impl App {
                 self.video_status.clear();
                 self.tune_deadline = None;
                 self.refresh_decoder();
+                self.apply_frame_cap();
                 if let Some((codec, hw)) = &self.last_decoder {
                     tracing::debug!("decoding {codec}: {}", hw.as_deref().unwrap_or("software"));
                 }

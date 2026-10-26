@@ -231,6 +231,47 @@ impl RefreshProbe {
     }
 }
 
+/// Settings → Display → Refresh target: draw on every Nth refresh (1 = every one).
+static FRAME_DIVISOR: AtomicU32 = AtomicU32::new(1);
+
+pub fn set_frame_divisor(n: u32) {
+    FRAME_DIVISOR.store(n.clamp(1, 4), Ordering::Relaxed);
+}
+
+pub fn frame_divisor() -> u32 {
+    FRAME_DIVISOR.load(Ordering::Relaxed)
+}
+
+/// The Refresh target: the refresh rate divided by the chosen fraction. An unknown refresh
+/// rate (a Wayland window) counts as 60 Hz, the usual TV rate.
+pub fn target_hz() -> f64 {
+    refresh_hz().unwrap_or(60.0) / frame_divisor() as f64
+}
+
+/// Frame rate to thin video down to for the Refresh target, when it's below the video's own
+/// (dropping frames; never duplicating them). `None`: show every frame.
+pub fn frame_cap(video_fps: Option<f64>) -> Option<f64> {
+    if frame_divisor() <= 1 {
+        return None;
+    }
+    let target = target_hz();
+    (target < video_fps? * 0.98).then_some(target)
+}
+
+/// "Full · 119.95 Hz", "Half · 59.98 Hz", or just "Half" while the refresh rate is unknown.
+pub fn target_label(refresh: Option<f64>, divisor: u32) -> String {
+    let name = match divisor {
+        2 => "Half",
+        3 => "Third",
+        4 => "Quarter",
+        _ => "Full",
+    };
+    match refresh {
+        Some(hz) => format!("{name} · {:.2} Hz", hz / divisor.clamp(1, 4) as f64),
+        None => name.to_string(),
+    }
+}
+
 /// Nearest common refresh rate to a measured one (measurements read a little low when
 /// frames are missed), or `None` if it isn't within 5% of any.
 pub fn snap_refresh(measured: f64) -> Option<f64> {
@@ -456,6 +497,16 @@ mod tests {
         assert_eq!(gpu_label("AMD Radeon 760M (radeonsi, phoenix, LLVM 19.1.7, DRM 3.64)"), "AMD Radeon 760M · radeonsi");
         assert_eq!(gpu_label("llvmpipe (LLVM 19.1.7, 256 bits)"), "llvmpipe (software)");
         assert_eq!(gpu_label("V3D 7.1"), "V3D 7.1");
+    }
+
+    #[test]
+    fn refresh_target_labels() {
+        assert_eq!(target_label(Some(60.0), 1), "Full · 60.00 Hz");
+        assert_eq!(target_label(Some(60.0), 2), "Half · 30.00 Hz");
+        assert_eq!(target_label(Some(119.95), 2), "Half · 59.98 Hz");
+        assert_eq!(target_label(Some(144.0), 3), "Third · 48.00 Hz");
+        assert_eq!(target_label(Some(144.0), 4), "Quarter · 36.00 Hz");
+        assert_eq!(target_label(None, 2), "Half");
     }
 
     #[test]

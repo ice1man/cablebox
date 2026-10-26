@@ -47,6 +47,7 @@ pub enum Field {
     AudioFormat,
     NightMode,
     VolumeBoost,
+    RefreshTarget,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -425,12 +426,21 @@ impl App {
                     Quality::High => "High",
                 };
                 match locked {
+                    None if c.display.refresh_divisor > 1 => v.extend([
+                        Item::info("Smooth motion", "Off at this refresh target"),
+                        Item::new("Picture quality", quality, Act::Cycle(Field::Quality)),
+                    ]),
                     None => v.extend([
                         Item::new("Smooth motion", on_off(c.display.smooth_motion), Act::Cycle(Field::SmoothMotion)),
                         Item::new("Picture quality", quality, Act::Cycle(Field::Quality)),
                     ]),
                     Some(why) => v.extend([Item::info("Smooth motion", why), Item::info("Picture quality", why)]),
                 }
+                v.push(Item::new(
+                    "Refresh target",
+                    crate::display::target_label(crate::display::refresh_hz(), c.display.refresh_divisor),
+                    Act::Cycle(Field::RefreshTarget),
+                ));
                 v.push(Item::new("Restart to apply", "", Act::Do(Action::RestartApp)));
                 v
             }
@@ -641,6 +651,7 @@ impl App {
             }
             Field::SmoothMotion => c.display.smooth_motion = !c.display.smooth_motion,
             Field::HwAccel => c.display.hw_accel = !c.display.hw_accel,
+            Field::RefreshTarget => c.display.refresh_divisor = c.display.refresh_divisor.clamp(1, 4) % 4 + 1,
             Field::AudioFormat => {
                 const ORDER: [AudioFormat; 3] = [AudioFormat::Stereo, AudioFormat::Surround, AudioFormat::Passthrough];
                 let i = ORDER.iter().position(|f| *f == c.sound.format).unwrap_or(0);
@@ -673,7 +684,7 @@ impl App {
         if f == Field::Scale {
             crate::apply_scale(&self.ui, self.cfg.display.scale);
         }
-        if matches!(f, Field::SmoothMotion | Field::Quality | Field::HwAccel) {
+        if matches!(f, Field::SmoothMotion | Field::Quality | Field::HwAccel | Field::RefreshTarget) {
             self.apply_video_settings();
         }
         if matches!(f, Field::AudioFormat | Field::NightMode | Field::VolumeBoost) {
@@ -826,7 +837,7 @@ impl App {
             Page::Root => ("SETTINGS", "Back or Menu returns to TV."),
             Page::Server => ("TVHEADEND SERVER", "◀ ▶ change options. Changes take effect when you choose Save & reconnect."),
             Page::Network => ("NETWORK", "Choose a Wi-Fi network to connect. Wired connections are used automatically."),
-            Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after a restart. Hardware acceleration uses the GPU to decode video, scale it and generate frames. Smooth motion blends frames to the screen's refresh rate (helps 24 fps films). High picture quality needs a strong GPU; keep Standard on a Raspberry Pi."),
+            Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after a restart. Hardware acceleration uses the GPU to decode video, scale it and generate frames. Smooth motion blends frames to the screen's refresh rate (helps 24 fps films). High picture quality needs a strong GPU; keep Standard on a Raspberry Pi. Refresh target draws less often to save power; below Full it thins the video and turns Smooth motion off."),
             Page::Sound => ("SOUND", "◀ ▶ change options. Passthrough sends Dolby Digital untouched to a soundbar or receiver; pick its HDMI output first, and use it only if it decodes Dolby Digital, or you'll hear nothing. Night mode evens out loud ads and quiet dialogue."),
             Page::AudioDevice => ("OUTPUT DEVICE", "Choose where sound plays. Auto uses the system's default output."),
             Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC."),

@@ -538,14 +538,14 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cablebox"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "chrono",
  "directories",
  "drm",
  "image",
- "input 0.1.11",
+ "input 0.1.12",
  "player",
  "serde",
  "slint",
@@ -2344,7 +2344,7 @@ dependencies = [
 
 [[package]]
 name = "input"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "evdev",
  "tracing",
@@ -3562,7 +3562,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "libmpv2",
  "libmpv2-sys",
@@ -4882,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "sysctl"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "futures-util",
  "thiserror 2.0.21",
@@ -5330,7 +5330,7 @@ dependencies = [
 
 [[package]]
 name = "tvh"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "diqwest",
  "reqwest",

@@ -287,6 +287,22 @@ impl Player {
         self.mpv.get_property::<String>("video-format").ok().filter(|c| !c.is_empty())
     }
 
+    /// Drops frames down to `fps` (Settings → Display → Refresh target), or shows all.
+    pub fn set_frame_cap(&self, fps: Option<f64>) {
+        let vf = fps.map(|f| format!("fps=fps={f:.3}")).unwrap_or_default();
+        if let Err(e) = self.mpv.set_property("vf", vf.as_str()) {
+            tracing::warn!("mpv: vf={vf} not supported ({e})");
+        }
+    }
+
+    /// The video's frame rate as shown: the stream's, doubled while deinterlacing (1080i
+    /// becomes 59.94). Independent of `set_frame_cap`.
+    pub fn video_fps(&self) -> Option<f64> {
+        let fps = self.mpv.get_property::<f64>("container-fps").ok().filter(|f| *f > 0.0)?;
+        let doubled = self.mpv.get_property::<bool>("deinterlace-active").unwrap_or(false);
+        Some(if doubled { fps * 2.0 } else { fps })
+    }
+
     /// "High" picture quality (sharper scaling, debanding; needs a strong GPU) or mpv's defaults.
     pub fn set_high_quality(&self, on: bool) {
         let values: Vec<(&str, &str)> = if on {

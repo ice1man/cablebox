@@ -160,6 +160,11 @@ Video settings, also in `Settings → Display`, apply immediately:
   costs GPU time; run with `RUST_LOG=info,cablebox=debug` to log mistimed/dropped frames. A
   measured rate well below the screen's (say 100 Hz on a 120 Hz screen) means the GPU can't keep
   up: use Standard picture quality, or turn Smooth motion off.
+- **Refresh target** draws less often to save GPU and power: Full, Half, Third or Quarter of the
+  screen's refresh rate (whole fractions, so frames stay evenly timed). Below Full, video faster
+  than the target is thinned to it (mpv's `fps` filter; e.g. 59.94 → 29.99 at Quarter on a 120 Hz
+  screen) and Smooth motion is off, since it needs every refresh. In a Wayland window, where the
+  screen doesn't report its rate, 60 Hz is assumed.
 - **Picture quality**: Standard keeps mpv's defaults. High uses `ewa_lanczossharp` scaling and
   debanding, which looks sharper on big screens but needs a strong GPU. Keep Standard on a Pi.
 

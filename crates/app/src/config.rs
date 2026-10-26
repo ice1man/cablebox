@@ -106,6 +106,8 @@ pub struct Display {
     pub quality: Quality,
     /// Use the GPU to decode video, scale it and generate frames.
     pub hw_accel: bool,
+    /// Refresh target: draw on every Nth screen refresh (1–4) to save GPU and power.
+    pub refresh_divisor: u32,
 }
 
 impl Default for Display {
@@ -117,6 +119,7 @@ impl Default for Display {
             smooth_motion: false,
             quality: Quality::Standard,
             hw_accel: true,
+            refresh_divisor: 1,
         }
     }
 }
@@ -156,13 +159,14 @@ pub struct VideoMode {
 
 impl Display {
     /// Without hardware acceleration (switched off, or only a software renderer) video is
-    /// decoded on the CPU and Smooth motion / High quality stay off. The saved choices are
-    /// kept for when it's back.
+    /// decoded on the CPU and Smooth motion / High quality stay off. Smooth motion draws on
+    /// every refresh, so it's also off below a Full refresh target. The saved choices are kept
+    /// for when they apply again.
     pub fn effective(&self, gpu_ok: bool) -> VideoMode {
         let hw = self.hw_accel && gpu_ok;
         VideoMode {
             hwdec: hw,
-            smooth_motion: hw && self.smooth_motion,
+            smooth_motion: hw && self.smooth_motion && self.refresh_divisor <= 1,
             quality: if hw { self.quality } else { Quality::Standard },
         }
     }
@@ -275,8 +279,18 @@ mod tests {
         d.hw_accel = false;
         assert_eq!(d.effective(true), off);
         assert_eq!((d.smooth_motion, d.quality), (true, Quality::High)); // choices kept
+        d.hw_accel = true;
+        d.refresh_divisor = 2; // below Full: no Smooth motion, quality unaffected
+        assert_eq!(d.effective(true), VideoMode { hwdec: true, smooth_motion: false, quality: Quality::High });
         let c: Config = toml::from_str("[display]\nsmooth_motion = true\n").unwrap();
         assert!(c.display.hw_accel); // configs from before the switch
+    }
+
+    #[test]
+    fn refresh_target_defaults_to_full() {
+        assert_eq!(Display::default().refresh_divisor, 1);
+        let c: Config = toml::from_str("[display]\nrefresh_divisor = 2\n").unwrap();
+        assert_eq!(c.display.refresh_divisor, 2);
     }
 
     #[test]

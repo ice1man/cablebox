@@ -12,6 +12,8 @@ pub struct Snapshot<'a> {
     /// Output size in physical pixels.
     pub out: (u32, u32),
     pub refresh_hz: Option<f64>,
+    /// Settings → Display → Refresh target (1 = every refresh).
+    pub divisor: u32,
     /// Frames CableBox drew in the last second.
     pub drawn_fps: f64,
     /// `None` until NetworkManager has answered.
@@ -65,6 +67,9 @@ pub fn text(s: &Snapshot<'_>) -> String {
     let mut out = format!("OUT  {}×{}", s.out.0, s.out.1);
     if let Some(hz) = s.refresh_hz {
         out += &format!(" @ {hz:.2} Hz");
+        if s.divisor > 1 {
+            out += &format!(" → target {:.2} Hz", hz / s.divisor as f64);
+        }
     }
     out += &format!("  {:.1} fps drawn", s.drawn_fps);
     lines.push(out);
@@ -139,7 +144,8 @@ mod tests {
             }),
             out: (1920, 1080),
             refresh_hz: Some(60.0),
-            drawn_fps: 59.84,
+            divisor: 2,
+            drawn_fps: 29.97,
             net: Some(&net),
             server: "http://10.50.50.235:9981",
         };
@@ -147,7 +153,7 @@ mod tests {
             text(&s),
             "IN   1920×1080  29.97 fps → 59.94 (deinterlaced)  h264 hw:vaapi\n\
              AUD  ac3 5.1 → alsa (passthrough)\n\
-             OUT  1920×1080 @ 60.00 Hz  59.8 fps drawn\n\
+             OUT  1920×1080 @ 60.00 Hz → target 30.00 Hz  30.0 fps drawn\n\
              NET  Wi-Fi \"home\" 72%  192.168.1.20\n\
              STR  10.50.50.235:9981  8.4 Mb/s  buffer 3.2 s"
         );
