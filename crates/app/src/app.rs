@@ -141,6 +141,10 @@ pub struct App {
     /// When to next read mpv's measured refresh rate, if the screen didn't report one.
     measure_refresh_at: Option<Instant>,
     refresh_probe: crate::display::RefreshProbe,
+    /// Debug overlay: when it last updated, the frame counter then, and the network status.
+    debug_at: Option<(Instant, u64)>,
+    debug_net: Option<sysctl::network::Status>,
+    debug_net_at: Option<Instant>,
 }
 
 impl App {
@@ -189,6 +193,9 @@ impl App {
             next_sync_log: None,
             measure_refresh_at: None,
             refresh_probe: Default::default(),
+            debug_at: None,
+            debug_net: None,
+            debug_net_at: None,
         }
     }
 
@@ -506,6 +513,40 @@ impl App {
         }
     }
 
+    /// Refreshes the debug overlay once a second while it's on (network every 5 s).
+    pub fn update_debug(&mut self, t: Instant) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        if !self.cfg.ui.debug_overlay {
+            if self.debug_at.take().is_some() {
+                ui.set_debug_text(Default::default());
+                self.debug_net = None;
+                self.debug_net_at = None;
+            }
+            return;
+        }
+        if self.debug_net_at.is_none_or(|at| t >= at) {
+            self.debug_net_at = Some(t + Duration::from_secs(5));
+            self.spawn(sysctl::network::status(), |a, r| a.debug_net = r.ok().or(Some(Default::default())));
+        }
+        let frames = crate::FRAMES_DRAWN.load(std::sync::atomic::Ordering::Relaxed);
+        let drawn_fps = match self.debug_at {
+            Some((at, _)) if t < at + Duration::from_secs(1) => return,
+            Some((at, n)) => (frames - n) as f64 / (t - at).as_secs_f64(),
+            None => 0.0,
+        };
+        self.debug_at = Some((t, frames));
+        let size = ui.window().size();
+        let text = crate::debug::text(&crate::debug::Snapshot {
+            video: self.player.video_info(),
+            out: (size.width, size.height),
+            refresh_hz: crate::display::refresh_hz(),
+            drawn_fps,
+            net: self.debug_net.as_ref(),
+            server: &self.cfg.server.url,
+        });
+        ui.set_debug_text(text.into());
+    }
+
     fn set_video_active(&mut self, on: bool) {
         self.video_active = on;
         let every = on && self.cfg.display.smooth_motion;
@@ -572,6 +613,8 @@ impl App {
     pub fn tick(&mut self) {
         let t = Instant::now();
         let mut dirty = false;
+
+        self.update_debug(t);
 
         if self.video_active && self.cfg.display.smooth_motion {
             let due = *self.next_sync_log.get_or_insert(t + Duration::from_secs(10));

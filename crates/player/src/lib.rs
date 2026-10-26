@@ -31,6 +31,21 @@ pub enum PlayerEvent {
     Duration(f64),
 }
 
+/// What's playing and how it's arriving, for the debug overlay.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct VideoInfo {
+    pub width: i64,
+    pub height: i64,
+    /// The stream's frame rate.
+    pub fps: Option<f64>,
+    /// Frame rate after filters (deinterlacing can double it).
+    pub vf_fps: Option<f64>,
+    /// Current download rate in bytes per second.
+    pub cache_speed: Option<i64>,
+    /// Seconds of stream buffered ahead.
+    pub buffered: Option<f64>,
+}
+
 /// Margins around the video as fractions of the output size.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct VideoRect {
@@ -198,6 +213,20 @@ impl Player {
     /// video plays and the renderer draws every refresh).
     pub fn estimated_display_fps(&self) -> Option<f64> {
         self.mpv.get_property::<f64>("estimated-display-fps").ok().filter(|f| *f > 0.0)
+    }
+
+    /// `None` when no video is playing.
+    pub fn video_info(&self) -> Option<VideoInfo> {
+        let m = self.mpv;
+        let width = m.get_property::<i64>("video-params/w").ok().filter(|w| *w > 0)?;
+        Some(VideoInfo {
+            width,
+            height: m.get_property::<i64>("video-params/h").unwrap_or(0),
+            fps: m.get_property::<f64>("container-fps").ok().filter(|f| *f > 0.0),
+            vf_fps: m.get_property::<f64>("estimated-vf-fps").ok().filter(|f| *f > 0.0),
+            cache_speed: m.get_property::<i64>("cache-speed").ok(),
+            buffered: m.get_property::<f64>("demuxer-cache-duration").ok(),
+        })
     }
 
     /// Frame timing summary for logs: sync mode, measured display rate, late and dropped frames.

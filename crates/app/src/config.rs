@@ -68,6 +68,8 @@ pub struct Ui {
     /// 4-digit PIN protecting Settings, updates and deleting recordings. Remove this line to reset it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pin: Option<String>,
+    /// Settings → System → Debug info overlay.
+    pub debug_overlay: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

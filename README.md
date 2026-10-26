@@ -155,6 +155,15 @@ Video settings, also in `Settings → Display`, apply immediately:
 - **Picture quality**: Standard keeps mpv's defaults. High uses `ewa_lanczossharp` scaling and
   debanding, which looks sharper on big screens but needs a strong GPU. Keep Standard on a Pi.
 
+**Debug info** (`Settings → System`) shows a box in the top-left corner of every screen:
+- **IN:** the video's resolution and frame rate, plus the rate after deinterlacing.
+- **OUT:** the screen's resolution, refresh rate, and frames CableBox actually drew in the last
+  second.
+- **NET:** wired or Wi-Fi (with signal), connection name, and IP address.
+- **STR:** the Tvheadend server, the stream's current download rate, and how many seconds are
+  buffered. Live TV plays close to the live edge, so a buffer near 0 s is normal; it matters
+  when it stays at 0 and the picture stutters.
+
 ## Running in a window
 
 Started from a desktop (the **CableBox** menu entry, or `cablebox` in a terminal), CableBox opens in

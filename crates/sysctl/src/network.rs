@@ -87,6 +87,8 @@ pub struct Status {
     pub name: String,
     pub address: String,
     pub wifi: bool,
+    /// Wi-Fi signal strength in percent.
+    pub signal: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +118,18 @@ pub async fn status() -> Result<Status> {
             }
         }
     }
+    if st.wifi {
+        st.signal = wifi_signal(&conn).await.ok();
+    }
     Ok(st)
+}
+
+/// Signal strength of the access point the Wi-Fi adapter is connected to (no scan).
+async fn wifi_signal(conn: &Connection) -> Result<u8> {
+    let dev = wifi_device(conn).await?;
+    let wifi = WirelessProxy::builder(conn).path(dev).build().await?;
+    let ap = AccessPointProxy::builder(conn).path(wifi.active_access_point().await?).build().await?;
+    Ok(ap.strength().await?)
 }
 
 async fn wifi_device(conn: &Connection) -> Result<OwnedObjectPath> {

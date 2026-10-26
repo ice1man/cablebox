@@ -6,6 +6,7 @@
 mod app;
 mod clock;
 mod config;
+mod debug;
 mod display;
 mod entry;
 mod guide;
@@ -15,7 +16,7 @@ mod views;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,6 +34,9 @@ slint::include_modules!();
 /// Redraw every refresh instead of only when mpv has a new frame (Smooth motion while
 /// video plays: mpv's frame timing needs a render and `report_swap` per vsync).
 pub static EVERY_FRAME: AtomicBool = AtomicBool::new(false);
+
+/// Frames drawn so far (the debug overlay's output frame rate).
+pub static FRAMES_DRAWN: AtomicU64 = AtomicU64::new(0);
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -160,6 +164,7 @@ fn setup_video_underlay(ui: &AppWindow, player: Arc<Player>, scale: Option<f32>)
             }
         }
         RenderingState::AfterRendering => {
+            FRAMES_DRAWN.fetch_add(1, Ordering::Relaxed);
             if let Some(r) = renderer.borrow().as_ref() {
                 r.report_swap();
             }

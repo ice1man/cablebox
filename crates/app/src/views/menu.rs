@@ -40,6 +40,7 @@ pub enum Field {
     Output,
     SmoothMotion,
     Quality,
+    DebugOverlay,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -355,6 +356,7 @@ impl App {
                 Item::new("Check for updates", self.updates.summary(), Act::CheckUpdates),
                 Item::new("Automatic update checks", on_off(c.updates.auto_check), Act::Cycle(Field::AutoUpdate)),
                 Item::new("Settings PIN", on_off(c.ui.pin.is_some()), Act::Pin),
+                Item::new("Debug info", on_off(c.ui.debug_overlay), Act::Cycle(Field::DebugOverlay)),
                 match self.menu.ssh {
                     Some(State::NotInstalled) => Item::info("Remote access (SSH)", "Not installed"),
                     Some(State::Running) => Item::new("Remote access (SSH)", self.ssh_address(), Act::Ssh),
@@ -519,6 +521,7 @@ impl App {
             }
             Field::Cec => c.remote.cec = !c.remote.cec,
             Field::AutoUpdate => c.updates.auto_check = !c.updates.auto_check,
+            Field::DebugOverlay => c.ui.debug_overlay = !c.ui.debug_overlay,
             Field::Scale => {
                 let i = SCALES.iter().position(|s| *s == c.display.scale).unwrap_or(0);
                 c.display.scale = SCALES[step(SCALES.len(), i)];
@@ -567,6 +570,9 @@ impl App {
         }
         if matches!(f, Field::SmoothMotion | Field::Quality) {
             self.apply_video_settings();
+        }
+        if f == Field::DebugOverlay {
+            self.update_debug(std::time::Instant::now());
         }
         if f == Field::Cec {
             self.toast("HDMI-CEC change applies after restart");

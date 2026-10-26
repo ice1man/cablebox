@@ -75,6 +75,9 @@ export component AppWindow inherits Window {
     in property <int> dialog-selected;
     in property <float> dialog-progress: -1;
 
+    // Settings → System → Debug info.
+    in property <string> debug-text;
+
     callback key(string) -> bool;
 
     forward-focus: keys;
@@ -159,6 +162,22 @@ export component AppWindow inherits Window {
             text: root.toast;
             color: Theme.text;
             font-size: 18px;
+        }
+    }
+
+    if root.debug-text != "": Rectangle {
+        x: 8px;
+        y: 8px;
+        width: debug-label.preferred-width + 20px;
+        height: debug-label.preferred-height + 12px;
+        border-radius: 4px;
+        background: #000000e8;
+        debug-label := Text {
+            text: root.debug-text;
+            font-family: "DejaVu Sans Mono";
+            font-size: 13px;
+            font-weight: 400;
+            color: #e8e8e8;
         }
     }
 
