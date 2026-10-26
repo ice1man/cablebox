@@ -175,7 +175,8 @@ impl App {
                         GuideCell {
                             title: match sp.event {
                                 Some(e) => e.title.clone(),
-                                None if self.epg.missing_blocks(sp.start, sp.stop).is_empty() => ch.name.clone(),
+                                // The channel sends no guide data for this time.
+                                None if self.epg.missing_blocks(sp.start, sp.stop).is_empty() => "No info".into(),
                                 None => "Loading…".into(),
                             }
                             .into(),
@@ -242,10 +243,10 @@ impl App {
                             },
                         },
                         None => GuideDetail {
-                            title: ch.name.clone().into(),
+                            title: "No program information".into(),
                             when: fmt_range(sp.start, sp.stop).into(),
                             channel: channel.into(),
-                            synopsis: "No program information available.".into(),
+                            synopsis: "This channel isn't sending guide data for this time.".into(),
                             hint: if sp.start <= t { "Watch".into() } else { Default::default() },
                             ..Default::default()
                         },
