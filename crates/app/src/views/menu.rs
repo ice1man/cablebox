@@ -268,13 +268,14 @@ impl App {
                     "Auto".to_string()
                 } else {
                     match choices.iter().find(|(n, _)| *n == s.device) {
+                        Some(_) if self.audio_failed => "No sound · using Auto".into(),
                         Some((_, label)) => label.clone(),
                         None => "Not connected · using Auto".into(),
                     }
                 };
                 // Passthrough needs a direct HDMI/S/PDIF output; mpv also decodes instead
                 // when that output turns the bitstream down.
-                let possible = crate::sound::passthrough_possible(&s.device);
+                let possible = crate::sound::passthrough_possible(&self.audio_in_use);
                 let playing = self.player.audio_info();
                 let passthrough = s.format == AudioFormat::Passthrough && possible;
                 let fallback = passthrough && playing.as_ref().is_some_and(|a| !a.passthrough);
@@ -414,7 +415,7 @@ impl App {
                     (true, false, _) if starting => "Starting…".into(),
                     (true, false, _) => "Hardware not available".into(),
                     (true, true, Some((_, Some(dec)))) => format!("On · {dec}"),
-                    (true, true, Some((codec, None))) => format!("On · {codec} decoded in software"),
+                    (true, true, Some((codec, None))) => format!("On · {codec} in software"),
                     (true, true, None) => "On".into(),
                 };
                 v.push(Item::new("Hardware acceleration", hw, Act::Cycle(Field::HwAccel)));
@@ -559,6 +560,7 @@ impl App {
             Act::Zone(z) => self.set_timezone(z),
             Act::AudioDevice(name) => {
                 self.cfg.sound.device = name;
+                self.audio_failed = false; // try the chosen output again
                 self.save_config_now();
                 self.apply_sound();
                 self.menu.stack.pop();
@@ -675,6 +677,9 @@ impl App {
             self.apply_video_settings();
         }
         if matches!(f, Field::AudioFormat | Field::NightMode | Field::VolumeBoost) {
+            if f == Field::AudioFormat {
+                self.audio_failed = false;
+            }
             self.apply_sound();
         }
         if f == Field::HwAccel {

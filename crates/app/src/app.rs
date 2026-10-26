@@ -26,6 +26,8 @@ use crate::views::system::UpdateState;
 use crate::{AppWindow, BannerData, Screen};
 
 const BANNER_TIME: Duration = Duration::from_secs(5);
+/// The audio watchdog judges playback speed over windows of this length.
+const STALL_WINDOW: Duration = Duration::from_secs(3);
 const TOAST_TIME: Duration = Duration::from_secs(3);
 const DVR_REFRESH: Duration = Duration::from_secs(60);
 const RECONNECT_DELAY: Duration = Duration::from_secs(10);
@@ -147,6 +149,13 @@ pub struct App {
     debug_net_at: Option<Instant>,
     /// Codec of the last video and its hardware decoder (`None`: decoded in software).
     pub last_decoder: Option<(String, Option<String>)>,
+    /// The audio output actually in use ("auto" when the saved one is missing or failed).
+    pub audio_in_use: String,
+    /// The saved output stalled playback this session; Auto is used until Sound changes.
+    pub audio_failed: bool,
+    /// Watchdog: position at the start of the current window, when it started, and how many
+    /// windows in a row played too slowly.
+    stall_check: Option<(f64, Instant, u32)>,
 }
 
 impl App {
@@ -199,6 +208,9 @@ impl App {
             debug_net: None,
             debug_net_at: None,
             last_decoder: None,
+            audio_in_use: "auto".into(),
+            audio_failed: false,
+            stall_check: None,
         }
     }
 
@@ -509,7 +521,7 @@ impl App {
     /// (the choice stays saved for when it's back).
     pub fn apply_sound(&mut self) {
         let s = &self.cfg.sound;
-        let device = if s.device.is_empty() {
+        let device = if s.device.is_empty() || self.audio_failed {
             "auto"
         } else if self.player.audio_devices().iter().any(|d| d.name == s.device) {
             s.device.as_str()
@@ -518,12 +530,54 @@ impl App {
             "auto"
         };
         self.player.set_audio(&crate::sound::mpv_options(s, device));
+        self.audio_in_use = device.to_string();
+        self.stall_check = None;
         tracing::info!("sound: {device}, {:?}, night mode {}, boost {}", s.format, s.night_mode, s.volume_boost);
         // Turning boost off brings a louder setting back to 100%.
         if self.player.volume() > 100 && !s.volume_boost {
             let _ = self.player.set_volume(100);
             self.cfg.ui.volume = Some(100);
             self.save_config_soon();
+        }
+    }
+
+    /// An audio output that accepts sound but never plays it (an HDMI port with nothing
+    /// attached, a device that takes a bitstream it can't use) stops mpv's clock, and with it
+    /// the picture. If playback stops moving while the stream keeps arriving, fall back to Auto
+    /// for this session and re-tune to get back to live.
+    fn watch_audio_stall(&mut self, t: Instant) {
+        // Auto is the system's own choice; only a chosen output can be the culprit.
+        if !self.video_active || self.audio_in_use == "auto" || self.audio_failed {
+            self.stall_check = None;
+            return;
+        }
+        let Some((pos, buffered, paused)) = self.player.progress() else { return };
+        let Some((last_pos, since, slow)) = self.stall_check else {
+            self.stall_check = Some((pos, t, 0));
+            return;
+        };
+        let elapsed = t.duration_since(since);
+        if elapsed < STALL_WINDOW {
+            return;
+        }
+        // Live TV plays in real time: less than half speed with data waiting means the
+        // output isn't consuming audio.
+        let rate = (pos - last_pos) / elapsed.as_secs_f64();
+        let slow = if !paused && rate < 0.5 && buffered >= 2.0 { slow + 1 } else { 0 };
+        tracing::debug!("audio watchdog: {:.2}× real time, {buffered:.1} s buffered, slow windows {slow}", rate);
+        self.stall_check = Some((pos, t, slow));
+        if slow < 2 {
+            return;
+        }
+        let name = self.audio_in_use.clone();
+        tracing::warn!("audio output {name} stalled playback ({rate:.2}× real time, {buffered:.1} s buffered); using Auto");
+        self.audio_failed = true;
+        self.apply_sound();
+        self.toast("No sound from that output; using Auto. Check the connection or pick another in Settings → Sound");
+        if self.playback.is_none() {
+            if let Some(uuid) = self.tuned.clone() {
+                self.tune(&uuid);
+            }
         }
     }
 
@@ -664,6 +718,7 @@ impl App {
         let mut dirty = false;
 
         self.update_debug(t);
+        self.watch_audio_stall(t);
 
         if self.video_active && self.video_mode().smooth_motion {
             let due = *self.next_sync_log.get_or_insert(t + Duration::from_secs(10));

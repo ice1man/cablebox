@@ -203,6 +203,17 @@ impl Player {
         if let Err(e) = self.mpv.command("ao-reload", &[]) {
             tracing::debug!("mpv: ao-reload: {e}");
         }
+        tracing::debug!("mpv audio: af={:?}", self.mpv.get_property::<String>("af").unwrap_or_default());
+    }
+
+    /// Playback position and seconds buffered ahead (for the stalled-output watchdog), and
+    /// whether mpv is paused for any reason (user, or waiting for the network).
+    pub fn progress(&self) -> Option<(f64, f64, bool)> {
+        let m = self.mpv;
+        let pos = m.get_property::<f64>("time-pos").ok()?;
+        let buffered = m.get_property::<f64>("demuxer-cache-duration").unwrap_or(0.0);
+        let paused = m.get_property::<bool>("pause").unwrap_or(false) || m.get_property::<bool>("paused-for-cache").unwrap_or(false);
+        Some((pos, buffered, paused))
     }
 
     /// `None` when nothing with audio is playing.
