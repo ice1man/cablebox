@@ -209,6 +209,7 @@ impl App {
             tracing::warn!("ignoring invalid settings PIN in config (must be 4 digits)");
             self.cfg.ui.pin = None;
         }
+        self.apply_sound();
         if let Some(v) = self.cfg.ui.volume {
             let _ = self.player.set_volume(v);
         }
@@ -504,6 +505,28 @@ impl App {
         self.set_video_active(self.video_active);
     }
 
+    /// Settings → Sound. A saved output that isn't connected falls back to Auto for this run
+    /// (the choice stays saved for when it's back).
+    pub fn apply_sound(&mut self) {
+        let s = &self.cfg.sound;
+        let device = if s.device.is_empty() {
+            "auto"
+        } else if self.player.audio_devices().iter().any(|d| d.name == s.device) {
+            s.device.as_str()
+        } else {
+            tracing::warn!("audio output {} is not connected; using Auto", s.device);
+            "auto"
+        };
+        self.player.set_audio(&crate::sound::mpv_options(s, device));
+        tracing::info!("sound: {device}, {:?}, night mode {}, boost {}", s.format, s.night_mode, s.volume_boost);
+        // Turning boost off brings a louder setting back to 100%.
+        if self.player.volume() > 100 && !s.volume_boost {
+            let _ = self.player.set_volume(100);
+            self.cfg.ui.volume = Some(100);
+            self.save_config_soon();
+        }
+    }
+
     /// What the player does with the current settings and GPU.
     pub fn video_mode(&self) -> crate::config::VideoMode {
         self.cfg.display.effective(crate::display::hw_available())
@@ -562,6 +585,7 @@ impl App {
         let size = ui.window().size();
         let text = crate::debug::text(&crate::debug::Snapshot {
             video: self.player.video_info(),
+            audio: self.player.audio_info(),
             out: (size.width, size.height),
             refresh_hz: crate::display::refresh_hz(),
             drawn_fps,
@@ -770,6 +794,10 @@ impl App {
             }
             RemoteKey::Menu if self.screen != Screen::Menu => self.run_action(crate::views::dialog::Action::OpenSettings),
             RemoteKey::Exit if configured => self.go_live(),
+            RemoteKey::VolumeUp | RemoteKey::VolumeDown if self.player.audio_info().is_some_and(|a| a.passthrough) => {
+                // A bitstream can't be made louder here; the receiver decodes it.
+                self.toast("Volume is set on your TV or receiver (passthrough)");
+            }
             RemoteKey::VolumeUp | RemoteKey::VolumeDown => {
                 let v = self.player.volume() + if k == RemoteKey::VolumeUp { 5 } else { -5 };
                 let _ = self.player.set_volume(v);

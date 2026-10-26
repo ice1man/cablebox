@@ -12,6 +12,7 @@ mod entry;
 mod guide;
 mod lineup;
 mod pin;
+mod sound;
 mod views;
 
 use std::cell::{Cell, RefCell};

@@ -162,6 +162,21 @@ Video settings, also in `Settings → Display`, apply immediately:
 - **Picture quality**: Standard keeps mpv's defaults. High uses `ewa_lanczossharp` scaling and
   debanding, which looks sharper on big screens but needs a strong GPU. Keep Standard on a Pi.
 
+**Sound** (`Settings → Sound`):
+- **Output device:** Auto, or a specific output (sound-server sinks, HDMI, S/PDIF, analog). An
+  output that isn't connected falls back to Auto without losing the choice.
+- **Audio format:**
+  - **Stereo** (default) downmixes, which is right for TV speakers.
+  - **Surround (5.1)** decodes all channels.
+  - **Passthrough** sends Dolby Digital untouched to a soundbar or receiver. It only works on a
+    direct HDMI or S/PDIF output (ALSA `hdmi:`/`iec958:`). On any other output it decodes like
+    Surround and the row says so, because sound servers accept the bitstream and then stall
+    playback. In passthrough, volume is set on the receiver.
+- **Night mode:** a gentle compressor, plus the broadcaster's own AC-3 range compression.
+- **Volume boost:** allows up to 130%.
+
+mpv's warnings and errors appear in CableBox's log (`journalctl -u cablebox`), prefixed `mpv`.
+
 **Debug info** (`Settings → System`) shows a box in the top-left corner of every screen:
 - **IN:** the video's resolution and frame rate, plus the rate after deinterlacing.
 - **OUT:** the screen's resolution, refresh rate, and frames CableBox actually drew in the last

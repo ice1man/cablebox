@@ -5,7 +5,7 @@ use sysctl::network::{AccessPointInfo, Status};
 use sysctl::services::State;
 
 use crate::app::{model, App};
-use crate::config::{AuthMode, Quality};
+use crate::config::{AudioFormat, AuthMode, Quality};
 use crate::views::dialog::{Action, Dialog};
 use crate::{AppWindow, MenuItem, Screen};
 
@@ -16,6 +16,8 @@ pub enum Page {
     Server,
     Network,
     Display,
+    Sound,
+    AudioDevice,
     Remote,
     System,
     Clock,
@@ -42,6 +44,9 @@ pub enum Field {
     Quality,
     DebugOverlay,
     HwAccel,
+    AudioFormat,
+    NightMode,
+    VolumeBoost,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +64,8 @@ enum Act {
     Console,
     Region(String),
     Zone(String),
+    /// Settings → Sound → Output device; empty = Auto.
+    AudioDevice(String),
     SetDateTime,
     Do(Action),
     None,
@@ -244,6 +251,7 @@ impl App {
                 Item::new("Tvheadend server", c.server.url.clone(), Act::Open(Page::Server)),
                 Item::new("Network", "", Act::Open(Page::Network)),
                 Item::new("Display", "", Act::Open(Page::Display)),
+                Item::new("Sound", "", Act::Open(Page::Sound)),
                 Item::new("Remote control", "", Act::Open(Page::Remote)),
                 Item::new(
                     "Clock & time zone",
@@ -253,6 +261,65 @@ impl App {
                 Item::new("System & updates", "", Act::Open(Page::System)),
             ],
             Page::Clock => self.clock_items(),
+            Page::Sound => {
+                let s = &c.sound;
+                let choices = crate::sound::choices(&self.player.audio_devices());
+                let device = if s.device.is_empty() {
+                    "Auto".to_string()
+                } else {
+                    match choices.iter().find(|(n, _)| *n == s.device) {
+                        Some((_, label)) => label.clone(),
+                        None => "Not connected · using Auto".into(),
+                    }
+                };
+                // Passthrough needs a direct HDMI/S/PDIF output; mpv also decodes instead
+                // when that output turns the bitstream down.
+                let possible = crate::sound::passthrough_possible(&s.device);
+                let playing = self.player.audio_info();
+                let passthrough = s.format == AudioFormat::Passthrough && possible;
+                let fallback = passthrough && playing.as_ref().is_some_and(|a| !a.passthrough);
+                vec![
+                    Item::new("Output device", device, Act::Open(Page::AudioDevice)),
+                    Item::new(
+                        "Audio format",
+                        match s.format {
+                            AudioFormat::Stereo => "Stereo",
+                            AudioFormat::Surround => "Surround (5.1)",
+                            AudioFormat::Passthrough if !possible => "Passthrough · needs an HDMI output",
+                            AudioFormat::Passthrough if fallback => "Passthrough · not supported here, decoding",
+                            AudioFormat::Passthrough => "Passthrough (Dolby Digital)",
+                        },
+                        Act::Cycle(Field::AudioFormat),
+                    ),
+                    if passthrough && !fallback {
+                        Item::info("Night mode", "Not with passthrough")
+                    } else {
+                        Item::new("Night mode", on_off(s.night_mode), Act::Cycle(Field::NightMode))
+                    },
+                    Item::new("Volume boost", if s.volume_boost { "On (up to 130%)" } else { "Off" }, Act::Cycle(Field::VolumeBoost)),
+                    Item::info(
+                        "Volume",
+                        if passthrough && !fallback {
+                            "Set on your TV or receiver".to_string()
+                        } else if self.player.muted() {
+                            "Muted".into()
+                        } else {
+                            format!("{}%", self.player.volume())
+                        },
+                    ),
+                ]
+            }
+            Page::AudioDevice => {
+                let current = c.sound.device.as_str();
+                let mark = |name: &str| if name == current { "✓" } else { "" };
+                let mut v = vec![Item::new("Auto", mark(""), Act::AudioDevice(String::new()))];
+                v.extend(
+                    crate::sound::choices(&self.player.audio_devices())
+                        .into_iter()
+                        .map(|(name, label)| Item::new(label, mark(&name), Act::AudioDevice(name))),
+                );
+                v
+            }
             Page::TzRegion => {
                 if self.menu.zones.is_empty() {
                     vec![Item::info("Loading time zones…", "")]
@@ -490,6 +557,12 @@ impl App {
                 self.open_page(Page::TzCity);
             }
             Act::Zone(z) => self.set_timezone(z),
+            Act::AudioDevice(name) => {
+                self.cfg.sound.device = name;
+                self.save_config_now();
+                self.apply_sound();
+                self.menu.stack.pop();
+            }
             Act::SetDateTime => self.ask_datetime(),
             Act::Ssh => {
                 let on = self.menu.ssh != Some(State::Running);
@@ -566,6 +639,13 @@ impl App {
             }
             Field::SmoothMotion => c.display.smooth_motion = !c.display.smooth_motion,
             Field::HwAccel => c.display.hw_accel = !c.display.hw_accel,
+            Field::AudioFormat => {
+                const ORDER: [AudioFormat; 3] = [AudioFormat::Stereo, AudioFormat::Surround, AudioFormat::Passthrough];
+                let i = ORDER.iter().position(|f| *f == c.sound.format).unwrap_or(0);
+                c.sound.format = ORDER[step(ORDER.len(), i)];
+            }
+            Field::NightMode => c.sound.night_mode = !c.sound.night_mode,
+            Field::VolumeBoost => c.sound.volume_boost = !c.sound.volume_boost,
             Field::Quality => {
                 c.display.quality = match c.display.quality {
                     Quality::Standard => Quality::High,
@@ -593,6 +673,9 @@ impl App {
         }
         if matches!(f, Field::SmoothMotion | Field::Quality | Field::HwAccel) {
             self.apply_video_settings();
+        }
+        if matches!(f, Field::AudioFormat | Field::NightMode | Field::VolumeBoost) {
+            self.apply_sound();
         }
         if f == Field::HwAccel {
             // mpv re-creates the decoder; show the result once it has.
@@ -739,6 +822,8 @@ impl App {
             Page::Server => ("TVHEADEND SERVER", "◀ ▶ change options. Changes take effect when you choose Save & reconnect."),
             Page::Network => ("NETWORK", "Choose a Wi-Fi network to connect. Wired connections are used automatically."),
             Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after a restart. Hardware acceleration uses the GPU to decode video, scale it and generate frames. Smooth motion blends frames to the screen's refresh rate (helps 24 fps films). High picture quality needs a strong GPU; keep Standard on a Raspberry Pi."),
+            Page::Sound => ("SOUND", "◀ ▶ change options. Passthrough sends Dolby Digital untouched to a soundbar or receiver; pick its HDMI output first, and use it only if it decodes Dolby Digital, or you'll hear nothing. Night mode evens out loud ads and quiet dialogue."),
+            Page::AudioDevice => ("OUTPUT DEVICE", "Choose where sound plays. Auto uses the system's default output."),
             Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC."),
             Page::System => ("SYSTEM", "Updates are installed from your distribution's package repositories."),
             Page::Clock => ("CLOCK", "◀ ▶ change options. With automatic time off, you can set the date and time yourself."),

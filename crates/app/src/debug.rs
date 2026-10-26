@@ -1,13 +1,14 @@
 //! Settings → System → Debug info: a corner overlay with what's playing, how it's shown,
 //! and how it's arriving.
 
-use player::VideoInfo;
+use player::{AudioInfo, VideoInfo};
 use sysctl::network::Status;
 
 /// Everything the overlay shows, gathered once a second.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot<'a> {
     pub video: Option<VideoInfo>,
+    pub audio: Option<AudioInfo>,
     /// Output size in physical pixels.
     pub out: (u32, u32),
     pub refresh_hz: Option<f64>,
@@ -42,6 +43,24 @@ pub fn text(s: &Snapshot<'_>) -> String {
         }
         None => "IN   no video".into(),
     });
+
+    if let Some(a) = &s.audio {
+        let mut l = format!("AUD  {}", a.codec.as_deref().unwrap_or("?"));
+        if let Some(ch) = &a.channels {
+            l += &format!(" {ch}");
+        }
+        l += " →";
+        if let Some(ch) = a.out_channels.as_ref().filter(|_| !a.passthrough) {
+            l += &format!(" {ch}");
+        }
+        if let Some(out) = &a.output {
+            l += &format!(" {out}");
+        }
+        if a.passthrough {
+            l += " (passthrough)";
+        }
+        lines.push(l);
+    }
 
     let mut out = format!("OUT  {}×{}", s.out.0, s.out.1);
     if let Some(hz) = s.refresh_hz {
@@ -111,6 +130,13 @@ mod tests {
         let net = wifi();
         let s = Snapshot {
             video: Some(video(29.97, 59.94)),
+            audio: Some(AudioInfo {
+                codec: Some("ac3".into()),
+                channels: Some("5.1".into()),
+                out_channels: Some("5.1".into()),
+                output: Some("alsa".into()),
+                passthrough: true,
+            }),
             out: (1920, 1080),
             refresh_hz: Some(60.0),
             drawn_fps: 59.84,
@@ -120,6 +146,7 @@ mod tests {
         assert_eq!(
             text(&s),
             "IN   1920×1080  29.97 fps → 59.94 (deinterlaced)  h264 hw:vaapi\n\
+             AUD  ac3 5.1 → alsa (passthrough)\n\
              OUT  1920×1080 @ 60.00 Hz  59.8 fps drawn\n\
              NET  Wi-Fi \"home\" 72%  192.168.1.20\n\
              STR  10.50.50.235:9981  8.4 Mb/s  buffer 3.2 s"

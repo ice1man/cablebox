@@ -121,6 +121,31 @@ impl Default for Display {
     }
 }
 
+/// Settings → Sound.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sound {
+    /// mpv audio device name ("alsa/hdmi:CARD=…"); empty = Auto.
+    pub device: String,
+    pub format: AudioFormat,
+    /// Compress loud and quiet passages closer together.
+    pub night_mode: bool,
+    /// Allow volume up to 130%.
+    pub volume_boost: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioFormat {
+    /// Downmixed to two channels: right for TV speakers, works everywhere.
+    #[default]
+    Stereo,
+    /// Decoded multichannel PCM (5.1) for a receiver or soundbar.
+    Surround,
+    /// Dolby Digital sent untouched over HDMI/S/PDIF for the receiver to decode.
+    Passthrough,
+}
+
 /// What the player actually does, given the settings and whether there's a real GPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoMode {
@@ -182,6 +207,7 @@ pub struct Config {
     pub clock: Clock,
     pub remote: Remote,
     pub display: Display,
+    pub sound: Sound,
     pub updates: Updates,
 }
 
@@ -251,6 +277,15 @@ mod tests {
         assert_eq!((d.smooth_motion, d.quality), (true, Quality::High)); // choices kept
         let c: Config = toml::from_str("[display]\nsmooth_motion = true\n").unwrap();
         assert!(c.display.hw_accel); // configs from before the switch
+    }
+
+    #[test]
+    fn sound_settings_load() {
+        let c: Config = toml::from_str("[server]\nurl = \"http://tv:9981\"\n").unwrap();
+        assert_eq!(c.sound, Sound::default());
+        assert_eq!(c.sound.format, AudioFormat::Stereo);
+        let c: Config = toml::from_str("[sound]\nformat = \"passthrough\"\nnight_mode = true\n").unwrap();
+        assert_eq!((c.sound.format, c.sound.night_mode, c.sound.volume_boost), (AudioFormat::Passthrough, true, false));
     }
 
     #[test]

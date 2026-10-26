@@ -31,6 +31,28 @@ pub enum PlayerEvent {
     Duration(f64),
 }
 
+/// An audio output mpv can use ("alsa/hdmi:CARD=Generic,DEV=0", "pipewire/…").
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct AudioDevice {
+    pub name: String,
+    pub description: String,
+}
+
+/// The current audio, for the debug overlay.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AudioInfo {
+    /// "ac3", "aac".
+    pub codec: Option<String>,
+    /// The broadcast's channel layout: "5.1(side)", "stereo".
+    pub channels: Option<String>,
+    /// Channels sent to the output after downmixing: "stereo", "5.1".
+    pub out_channels: Option<String>,
+    /// Audio output in use: "pipewire", "alsa".
+    pub output: Option<String>,
+    /// Sent as a bitstream to the TV or receiver (passthrough).
+    pub passthrough: bool,
+}
+
 /// What's playing and how it's arriving, for the debug overlay.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VideoInfo {
@@ -116,6 +138,9 @@ impl Player {
         // CString (use-after-free). With `None` it passes NULL and mpv picks a name.
         let events = mpv.create_client(None)?;
         events.disable_deprecated_events()?;
+        // mpv's own warnings and errors go to our log (the journal on a box).
+        // SAFETY: a valid handle owned by `events`; mpv copies the level string.
+        unsafe { libmpv2_sys::mpv_request_log_messages(events.ctx.as_ptr(), c"warn".as_ptr()) };
         events.observe_property("pause", Format::Flag, PROP_PAUSE)?;
         events.observe_property("time-pos", Format::Double, PROP_TIME_POS)?;
         events.observe_property("duration", Format::Double, PROP_DURATION)?;
@@ -155,12 +180,51 @@ impl Player {
         Ok(self.mpv.command("seek", &[&secs.to_string(), "relative"])?)
     }
 
+    /// Clamped to 0..`volume-max` (100, or 130 with Volume boost).
     pub fn set_volume(&self, percent: i64) -> Result<()> {
-        Ok(self.mpv.set_property("volume", percent.clamp(0, 130))?)
+        let max = self.mpv.get_property::<f64>("volume-max").unwrap_or(130.0) as i64;
+        Ok(self.mpv.set_property("volume", percent.clamp(0, max))?)
+    }
+
+    /// Audio outputs mpv knows about (unfiltered).
+    pub fn audio_devices(&self) -> Vec<AudioDevice> {
+        let json = self.mpv.get_property::<String>("audio-device-list").unwrap_or_default();
+        serde_json::from_str(&json).unwrap_or_default()
+    }
+
+    /// Applies audio options (device, channels, passthrough, filters) and reopens the audio
+    /// output so they take effect on what's playing.
+    pub fn set_audio(&self, opts: &[(&str, String)]) {
+        for (name, value) in opts {
+            if let Err(e) = self.mpv.set_property(name, value.as_str()) {
+                tracing::warn!("mpv: {name}={value} not supported ({e})");
+            }
+        }
+        if let Err(e) = self.mpv.command("ao-reload", &[]) {
+            tracing::debug!("mpv: ao-reload: {e}");
+        }
+    }
+
+    /// `None` when nothing with audio is playing.
+    pub fn audio_info(&self) -> Option<AudioInfo> {
+        let m = self.mpv;
+        let get = |p: &str| m.get_property::<String>(p).ok().filter(|s| !s.is_empty());
+        let codec = get("audio-codec-name")?;
+        Some(AudioInfo {
+            codec: Some(codec),
+            channels: get("current-tracks/audio/demux-channels"),
+            out_channels: get("audio-out-params/hr-channels"),
+            output: get("current-ao"),
+            passthrough: get("audio-out-params/format").is_some_and(|f| f.starts_with("spdif")),
+        })
     }
 
     pub fn volume(&self) -> i64 {
         self.mpv.get_property("volume").unwrap_or(100)
+    }
+
+    pub fn muted(&self) -> bool {
+        self.mpv.get_property::<bool>("mute").unwrap_or(false)
     }
 
     pub fn toggle_mute(&self) -> Result<()> {
@@ -349,6 +413,15 @@ fn event_loop(events: Mpv, on_event: impl Fn(PlayerEvent)) {
         };
         match ev {
             Event::Shutdown => break,
+            Event::LogMessage { prefix, level, text, .. } => {
+                let text = text.trim_end();
+                match level {
+                    // ffmpeg complains about every tune-in until the first full frame.
+                    _ if prefix.starts_with("ffmpeg") => tracing::debug!("mpv {prefix}: {text}"),
+                    "fatal" | "error" => tracing::error!("mpv {prefix}: {text}"),
+                    _ => tracing::warn!("mpv {prefix}: {text}"),
+                }
+            }
             Event::PlaybackRestart => on_event(PlayerEvent::Playing),
             // Reasons: 0 EOF, 2 stop/replaced (every channel change), 3 quit, 4 error.
             Event::EndFile(0) => on_event(PlayerEvent::Ended { error: None }),

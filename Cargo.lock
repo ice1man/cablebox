@@ -3565,6 +3565,9 @@ name = "player"
 version = "0.1.11"
 dependencies = [
  "libmpv2",
+ "libmpv2-sys",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
 ]
