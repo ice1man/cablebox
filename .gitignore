@@ -1,1 +1,4 @@
 /target
+/firmware/rp2040/target
+/firmware/rp2040/bootloader/target
+/firmware/rp2040/target-standalone

@@ -9,3 +9,9 @@ rust-version.workspace = true
 [dependencies]
 tracing.workspace = true
 evdev = "0.13"
+ir-proto = { path = "../ir-proto" }
+rustix = { version = "1", features = ["fs", "termios"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+rustix = { version = "1", features = ["pty", "process"] }

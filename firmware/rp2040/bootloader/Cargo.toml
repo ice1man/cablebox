@@ -1,0 +1,22 @@
+# Starts the application, and swaps in new firmware or rolls it back.
+[package]
+name = "cablebox-ir-boot"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+publish = false
+
+[dependencies]
+embassy-boot-rp = "0.10"
+embassy-rp = { version = "0.10", features = ["rp2040", "critical-section-impl", "unstable-pac"] }
+embassy-sync = "0.8"
+embassy-time = "0.5"
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+
+[profile.release]
+opt-level = "s"
+lto = true
+debug = false
+
+[workspace]

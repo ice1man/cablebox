@@ -17,6 +17,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 input = { path = "../input" }
+ir-proto = { path = "../ir-proto" }
 sysctl = { path = "../sysctl" }
 toml = "0.8"
 directories = "6"
@@ -56,6 +57,7 @@ assets = [
     ["../../packaging/cablebox.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/cablebox-cec.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/50-cablebox.rules", "usr/share/polkit-1/rules.d/", "644"],
+    ["../../packaging/70-cablebox-ir.rules", "usr/lib/udev/rules.d/", "644"],
     ["../../packaging/cablebox.desktop", "usr/share/applications/", "644"],
     ["../../packaging/cablebox.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["../../README.md", "usr/share/doc/cablebox/", "644"],

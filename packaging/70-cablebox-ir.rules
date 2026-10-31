@@ -1,0 +1,4 @@
+# IR receivers start out decoding only their stock remote's protocol, so any other remote
+# produces no events at all. Enable every protocol so CableBox can learn it. CEC adapters
+# also appear as rc devices but aren't IR.
+ACTION=="add", SUBSYSTEM=="rc", ATTR{protocols}!="*cec*", ATTR{protocols}="all"

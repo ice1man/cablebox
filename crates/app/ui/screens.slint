@@ -166,7 +166,7 @@ export component DvrPage inherits Rectangle {
         HorizontalLayout {
             height: 24px;
             spacing: 22px;
-            KeyLegend { color: Theme.focus; text: "OK  Play / Options"; }
+            KeyLegend { color: Theme.focus; text: root.tab == 1 ? "OK  Play / Options" : root.tab == 0 ? "OK  Cancel" : "OK  Remove"; }
             KeyLegend { color: Theme.key-red; text: "Delete / Cancel"; }
             KeyLegend { color: Theme.text-dim; text: "Back  Exit"; }
         }

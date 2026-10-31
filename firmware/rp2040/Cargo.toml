@@ -1,0 +1,31 @@
+# Built for the Pico's own target, so it stays out of the main workspace.
+[package]
+name = "cablebox-ir"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+publish = false
+
+[dependencies]
+ir-proto = { path = "../../crates/ir-proto" }
+ir-signal = { path = "../../crates/ir-signal" }
+embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "unstable-pac"] }
+embassy-boot-rp = "0.10"
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-futures = "0.1"
+embassy-sync = "0.8"
+embassy-time = "0.5"
+embassy-usb = "0.6"
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+sha2 = { version = "0.10", default-features = false }
+static_cell = "2"
+portable-atomic = { version = "1", features = ["critical-section"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+debug = false
+
+[workspace]
+exclude = ["bootloader"]

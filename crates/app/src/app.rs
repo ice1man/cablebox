@@ -10,12 +10,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{Local, TimeZone};
+use input::remote::{RemoteEvent, RemoteHandle};
 use input::RemoteKey;
 use player::{Player, PlayerEvent};
 use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use tvh::{Channel, ChannelTag, DvrEntry, EpgEvent};
 
-use crate::config::Config;
+use crate::config::{Config, ConfigProblem};
 use crate::entry::{ChannelEntry, Entry};
 use crate::guide::{EpgCache, GuideNav, BLOCK};
 use crate::lineup::{Filter, Lineup};
@@ -64,6 +65,15 @@ pub fn post(f: impl FnOnce(&mut App) + Send + 'static) {
     });
 }
 
+/// What to show when the server can't be used. The technical detail goes to the log: it's long,
+/// and a server that's simply down can read as an authentication error.
+fn connection_problem(e: &tvh::Error) -> &'static str {
+    match e {
+        tvh::Error::Unauthorized => "Tvheadend login failed — check Settings",
+        _ => "Cannot reach Tvheadend — retrying",
+    }
+}
+
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
@@ -94,6 +104,8 @@ pub struct App {
     pub rt: tokio::runtime::Handle,
     pub player: Arc<Player>,
     pub cfg: Config,
+    /// The settings file couldn't be loaded, so it isn't written to until this is cleared.
+    pub config_problem: Option<ConfigProblem>,
     config_dirty: Option<Instant>,
 
     pub tvh: Option<tvh::Client>,
@@ -134,6 +146,10 @@ pub struct App {
     /// The settings PIN was entered; cleared when leaving Settings.
     pub settings_unlocked: bool,
     pub pin_gate: crate::pin::PinGate,
+    /// The remote readers; `None` in a window or with remote input turned off.
+    pub remote: Option<RemoteHandle>,
+    /// A receiver firmware update is running.
+    pub pico_updating: bool,
     /// Running as the `cablebox.service` session on a box (not a dev window).
     pub under_service: bool,
     /// mpv is showing video (between its first frame and stop/end).
@@ -159,13 +175,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(ui: &AppWindow, rt: tokio::runtime::Handle, player: Arc<Player>, cfg: Config) -> Self {
+    pub fn new(ui: &AppWindow, rt: tokio::runtime::Handle, player: Arc<Player>, cfg: Config, config_problem: Option<ConfigProblem>, remote: Option<RemoteHandle>) -> Self {
         let first_check = Instant::now() + Duration::from_secs(60);
         Self {
             ui: ui.as_weak(),
             rt,
             player,
             cfg,
+            config_problem,
             config_dirty: None,
             tvh: None,
             gen: 0,
@@ -199,6 +216,8 @@ impl App {
             updates: UpdateState::new(first_check),
             settings_unlocked: false,
             pin_gate: Default::default(),
+            remote,
+            pico_updating: false,
             under_service: false,
             video_active: false,
             next_sync_log: None,
@@ -248,6 +267,7 @@ impl App {
         } else {
             self.open_setup();
         }
+        self.offer_config_problem();
         self.render();
     }
 
@@ -285,7 +305,7 @@ impl App {
     pub fn save_config_now(&mut self) {
         self.config_dirty = None;
         self.cfg.ui.favorites = self.lineup.favorites();
-        if let Err(e) = self.cfg.save() {
+        if let Err(e) = self.cfg.save_unless(self.config_problem.as_ref()) {
             tracing::error!("saving config: {e:#}");
             self.toast("Could not save settings");
         }
@@ -325,10 +345,7 @@ impl App {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("loading channels: {e}");
-                self.video_status = match e {
-                    tvh::Error::Unauthorized => "Tvheadend login failed — check Settings".into(),
-                    _ => format!("Cannot reach Tvheadend ({e})"),
-                };
+                self.video_status = connection_problem(&e).into();
                 self.reconnect_at = Some(Instant::now() + RECONNECT_DELAY);
                 self.render();
                 return;
@@ -735,6 +752,7 @@ impl App {
 
         self.update_debug(t);
         self.watch_audio_stall(t);
+        dirty |= self.tick_learning(t);
 
         if self.video_active && self.video_mode().smooth_motion {
             let due = *self.next_sync_log.get_or_insert(t + Duration::from_secs(10));
@@ -825,6 +843,15 @@ impl App {
                 true
             }
             None => false,
+        }
+    }
+
+    pub fn on_remote_event(&mut self, event: RemoteEvent) {
+        match event {
+            RemoteEvent::Key(k) => self.on_key(k),
+            RemoteEvent::Captured(button) => self.learn_press(button),
+            RemoteEvent::PicoChanged => self.pico_changed(),
+            RemoteEvent::PicoUpdate(status) => self.pico_update(status),
         }
     }
 
@@ -1113,6 +1140,14 @@ pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn connection_problems_are_short_and_name_the_right_cause() {
+        use super::connection_problem;
+        assert_eq!(connection_problem(&tvh::Error::Unauthorized), "Tvheadend login failed — check Settings");
+        let other = tvh::Error::TooLarge(1);
+        assert_eq!(connection_problem(&other), "Cannot reach Tvheadend — retrying");
+    }
+
     use super::decode_logo;
 
     fn png(w: u32, h: u32) -> Vec<u8> {

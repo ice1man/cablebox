@@ -1,9 +1,10 @@
 //! Persistent settings in `~/.config/cablebox/config.toml` (mode 0600: holds the server password).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -82,11 +83,18 @@ pub struct Remote {
     /// system's own setting alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh: Option<bool>,
+    /// Receiver firmware already offered ("IR1 0.2.0"), so the prompt appears once per version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firmware_prompted: Option<String>,
+    /// Remote buttons taught in Settings, as `"scan:800f0422" = "ok"`. Keep this last: TOML
+    /// writes tables after plain values.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub buttons: BTreeMap<String, String>,
 }
 
 impl Default for Remote {
     fn default() -> Self {
-        Self { cec: true, cec_name: "CableBox".into(), ssh: None }
+        Self { cec: true, cec_name: "CableBox".into(), ssh: None, firmware_prompted: None, buttons: BTreeMap::new() }
     }
 }
 
@@ -203,6 +211,132 @@ pub struct Clock {
     pub hour24: bool,
 }
 
+/// Why the settings file couldn't be used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigProblem {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+impl ConfigProblem {
+    /// Comments out the bad lines, after copying the file to a backup. On any failure the file
+    /// is left exactly as it was, and the error says why, in a form to show on screen.
+    pub fn repair(&self) -> Result<Repaired, String> {
+        let text = fs::read_to_string(&self.path).map_err(|e| format!("Couldn't read the file: {e}"))?;
+        let (repaired, removed) = repair_text(&text)?;
+        let backup = backup_path(&self.path);
+        write_atomic(&backup, text.as_bytes()).map_err(|e| format!("Couldn't save a backup: {e:#}"))?;
+        write_atomic(&self.path, repaired.as_bytes()).map_err(|e| format!("Couldn't write the file: {e:#}"))?;
+        Ok(Repaired { removed, backup })
+    }
+
+    /// Moves the file out of the way, never over an earlier backup. Returns where it went.
+    pub fn set_aside(&self) -> std::io::Result<PathBuf> {
+        let backup = backup_path(&self.path);
+        fs::rename(&self.path, &backup)?;
+        Ok(backup)
+    }
+}
+
+/// Most bad lines a repair will comment out before giving up.
+const MAX_REPAIRS: usize = 10;
+
+/// Comments out the lines stopping `text` from loading. Returns the new text and each removed
+/// line's number and content. Lines keep their numbers, so errors stay easy to find.
+fn repair_text(text: &str) -> Result<(String, Vec<(usize, String)>), String> {
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let mut removed = Vec::new();
+    loop {
+        let current = lines.join("\n");
+        let Err(e) = toml::from_str::<Config>(&current) else { return Ok((current, removed)) };
+        if removed.len() == MAX_REPAIRS {
+            return Err(format!("More than {MAX_REPAIRS} lines have errors."));
+        }
+        let Some(span) = e.span() else { return Err(describe_parse_error(&current, &e)) };
+        let index = current.as_bytes()[..span.start.min(current.len())].iter().filter(|b| **b == b'\n').count();
+        let line = lines[index].clone();
+        let trimmed = line.trim();
+        // Without its header, a section's settings would land in the section above and be
+        // silently ignored.
+        if trimmed.starts_with('[') {
+            return Err(format!("Line {} is a section header, which has to be fixed by hand.", index + 1));
+        }
+        // Nothing to take out: the error is something this can't fix a line at a time.
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return Err(describe_parse_error(&current, &e));
+        }
+        lines[index] = format!("# Commented out by CableBox: {line}");
+        removed.push((index + 1, line));
+    }
+}
+
+/// A bad line, safe to show on a TV: a value that may be secret is hidden.
+pub fn describe_removed(line: &str) -> String {
+    let line = line.trim();
+    let key = line.split('=').next().unwrap_or(line).trim();
+    let lower = key.to_ascii_lowercase();
+    if ["pass", "pin", "secret", "token", "key"].iter().any(|s| lower.contains(s)) {
+        return format!("{key} = ••••");
+    }
+    let mut chars = line.chars();
+    let short: String = chars.by_ref().take(50).collect();
+    if chars.next().is_some() {
+        format!("{short}…")
+    } else {
+        short
+    }
+}
+
+/// Writes through a temporary file, with owner-only permissions: this holds passwords.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".tmp");
+    let tmp = PathBuf::from(name);
+    let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+    fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+}
+
+/// What a repair did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Repaired {
+    /// Each commented-out line's number and original content.
+    pub removed: Vec<(usize, String)>,
+    pub backup: PathBuf,
+}
+
+/// The first unused of `config.toml.bad`, `config.toml.bad.1`, ...
+fn backup_path(path: &Path) -> PathBuf {
+    let name = |suffix: String| {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    std::iter::once(name(".bad".into()))
+        .chain((1..).map(|n| name(format!(".bad.{n}"))))
+        .find(|p| !p.exists())
+        .expect("an unused name")
+}
+
+/// One line saying where the error is and what it is.
+fn describe_parse_error(text: &str, e: &toml::de::Error) -> String {
+    let what = e.message().lines().next().unwrap_or("not valid");
+    match e.span() {
+        Some(span) => {
+            let before = &text.as_bytes()[..span.start.min(text.len())];
+            let line = before.iter().filter(|b| **b == b'\n').count() + 1;
+            let column = before.iter().rev().take_while(|b| **b != b'\n').count() + 1;
+            format!("Line {line}, column {column}: {what}")
+        }
+        None => what.to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -225,27 +359,38 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("cablebox.toml"))
     }
 
-    pub fn load() -> Result<Self> {
-        let path = Self::path();
-        match fs::read_to_string(&path) {
-            Ok(s) => toml::from_str(&s).with_context(|| format!("parsing {}", path.display())),
+    pub fn load() -> Result<Self, ConfigProblem> {
+        Self::load_from(&Self::path())
+    }
+
+    /// A missing file is a normal first run. Anything else that stops it loading is a problem,
+    /// and the file must then be left alone: it may hold the only copy of the settings.
+    fn load_from(path: &Path) -> Result<Self, ConfigProblem> {
+        let problem = |message| ConfigProblem { path: path.to_path_buf(), message };
+        match fs::read_to_string(path) {
+            Ok(s) => toml::from_str(&s).map_err(|e| problem(describe_parse_error(&s, &e))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+            Err(e) => Err(problem(format!("Couldn't read it: {e}"))),
         }
     }
 
-    /// Writes atomically with owner-only permissions.
-    pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
+    /// Saves, unless the file on disk couldn't be loaded. Returns whether it was written.
+    pub fn save_unless(&self, problem: Option<&ConfigProblem>) -> Result<bool> {
+        self.save_to_unless(&Self::path(), problem)
+    }
+
+    fn save_to_unless(&self, path: &Path, problem: Option<&ConfigProblem>) -> Result<bool> {
+        if problem.is_some() {
+            tracing::warn!("not saving settings: {} has an error", path.display());
+            return Ok(false);
         }
-        let tmp = path.with_extension("toml.tmp");
-        let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-        f.write_all(toml::to_string_pretty(self)?.as_bytes())?;
-        f.sync_all()?;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-        fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
+        self.save_to(path)?;
+        Ok(true)
+    }
+
+    /// Writes atomically with owner-only permissions.
+    fn save_to(&self, path: &Path) -> Result<()> {
+        write_atomic(path, toml::to_string_pretty(self)?.as_bytes())
     }
 
     pub fn is_configured(&self) -> bool {
@@ -300,6 +445,151 @@ mod tests {
         assert_eq!(c.sound.format, AudioFormat::Stereo);
         let c: Config = toml::from_str("[sound]\nformat = \"passthrough\"\nnight_mode = true\n").unwrap();
         assert_eq!((c.sound.format, c.sound.night_mode, c.sound.volume_boost), (AudioFormat::Passthrough, true, false));
+    }
+
+    /// A new empty folder for one test.
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cablebox-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_missing_file_is_a_first_run_and_not_a_problem() {
+        let path = temp_dir("missing").join("config.toml");
+        assert_eq!(Config::load_from(&path), Ok(Config::default()));
+    }
+
+    #[test]
+    fn a_broken_file_is_a_problem_naming_where() {
+        let path = temp_dir("broken").join("config.toml");
+        fs::write(&path, "[server]\nurl = \"http://tv:9981\"\nuser = oops\n").unwrap();
+        let problem = Config::load_from(&path).unwrap_err();
+        assert_eq!(problem.path, path);
+        assert!(problem.message.starts_with("Line 3, column 8: "), "{}", problem.message);
+        // A valid file with a wrong type counts too.
+        fs::write(&path, "[remote]\ncec = \"yes\"\n").unwrap();
+        assert!(Config::load_from(&path).unwrap_err().message.starts_with("Line 2, "));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_a_problem() {
+        // Not text, so it can't be read as settings.
+        let path = temp_dir("unreadable").join("config.toml");
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        assert!(Config::load_from(&path).unwrap_err().message.starts_with("Couldn't read it"));
+    }
+
+    #[test]
+    fn saving_leaves_a_broken_file_exactly_as_it_was() {
+        let path = temp_dir("guard").join("config.toml");
+        let broken = "[server]\nurl = \"http://tv:9981\"\npass = \"secret\"\nuser = oops\n";
+        fs::write(&path, broken).unwrap();
+        let problem = Config::load_from(&path).unwrap_err();
+        assert!(!Config::default().save_to_unless(&path, Some(&problem)).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+        // Once it's dealt with, saving works again.
+        assert!(Config::default().save_to_unless(&path, None).unwrap());
+        assert_eq!(Config::load_from(&path), Ok(Config::default()));
+    }
+
+    #[test]
+    fn setting_aside_never_overwrites_a_backup() {
+        let path = temp_dir("backup").join("config.toml");
+        let problem = ConfigProblem { path: path.clone(), message: String::new() };
+        let mut name = path.clone().into_os_string();
+        name.push(".bad");
+        let first = PathBuf::from(name.clone());
+        name.push(".1");
+        let second = PathBuf::from(name);
+
+        fs::write(&path, "first").unwrap();
+        assert_eq!(problem.set_aside().unwrap(), first);
+        assert!(!path.exists());
+        fs::write(&path, "second").unwrap();
+        assert_eq!(problem.set_aside().unwrap(), second);
+        assert_eq!(fs::read_to_string(&first).unwrap(), "first");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "second");
+    }
+
+    const TYPO: &str = "[server]\nurl = \"http://tv:9981\"\nauth = none\n[remote]\ncec = false\n[remote.buttons]\n\"ir:nec:01:0b\" = \"up\"\n";
+
+    #[test]
+    fn repair_comments_out_only_the_bad_line_and_keeps_the_rest() {
+        let (text, removed) = repair_text(TYPO).unwrap();
+        assert_eq!(removed, [(3, "auth = none".to_string())]);
+        assert!(text.contains("# Commented out by CableBox: auth = none\n"));
+        let c: Config = toml::from_str(&text).unwrap();
+        assert_eq!(c.server.url, "http://tv:9981");
+        assert_eq!(c.server.auth, Server::default().auth); // only this one went back to default
+        assert!(!c.remote.cec);
+        assert_eq!(c.remote.buttons.get("ir:nec:01:0b").unwrap(), "up");
+    }
+
+    #[test]
+    fn repair_handles_several_bad_lines_and_wrong_types() {
+        let (text, removed) = repair_text("[server]\nauth = none\nuser = oops\n[remote]\ncec = \"yes\"\ncec_name = \"Box\"\n").unwrap();
+        assert_eq!(removed.iter().map(|r| r.0).collect::<Vec<_>>(), [2, 3, 5]);
+        assert_eq!(toml::from_str::<Config>(&text).unwrap().remote.cec_name, "Box");
+    }
+
+    #[test]
+    fn repair_refuses_a_bad_section_header() {
+        for text in ["[server\nurl = \"http://tv:9981\"\n", "[remote]\ncec = true\n[remote]\ncec = false\n"] {
+            let e = repair_text(text).unwrap_err();
+            assert!(e.contains("section header"), "{e}");
+        }
+    }
+
+    #[test]
+    fn repair_gives_up_after_too_many_bad_lines() {
+        let text = format!("[server]\n{}", (0..=MAX_REPAIRS).map(|i| format!("k{i} = oops\n")).collect::<String>());
+        assert!(repair_text(&text).unwrap_err().contains("More than"));
+    }
+
+    #[test]
+    fn repair_makes_a_private_backup_of_the_original() {
+        let path = temp_dir("repair").join("config.toml");
+        fs::write(&path, TYPO).unwrap();
+        let problem = Config::load_from(&path).unwrap_err();
+        let done = problem.repair().unwrap();
+        assert_eq!(fs::read_to_string(&done.backup).unwrap(), TYPO);
+        assert_eq!(fs::metadata(&done.backup).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(Config::load_from(&path).unwrap().server.url, "http://tv:9981");
+    }
+
+    #[test]
+    fn a_refused_repair_leaves_the_file_alone_with_no_backup() {
+        let dir = temp_dir("refused");
+        let path = dir.join("config.toml");
+        fs::write(&path, "[server\nurl = 1\n").unwrap();
+        let problem = Config::load_from(&path).unwrap_err();
+        assert!(problem.repair().is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[server\nurl = 1\n");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn removed_lines_shown_on_screen_hide_secrets() {
+        assert_eq!(describe_removed("  auth = none"), "auth = none");
+        assert_eq!(describe_removed("pass = hunter2"), "pass = ••••");
+        assert_eq!(describe_removed("pin = 12x4"), "pin = ••••");
+        assert!(describe_removed(&"x".repeat(80)).ends_with('…'));
+    }
+
+    #[test]
+    fn learned_buttons_round_trip() {
+        let old: Config = toml::from_str("[remote]\ncec = false\n").unwrap();
+        assert!(old.remote.buttons.is_empty()); // configs from before learning
+        assert!(!toml::to_string_pretty(&old).unwrap().contains("buttons"));
+        let mut c = Config::default();
+        c.remote.ssh = Some(true);
+        c.remote.buttons.insert("scan:800f0422".into(), "ok".into());
+        c.remote.buttons.insert("key:KEY_OK".into(), "guide".into());
+        let text = toml::to_string_pretty(&c).unwrap();
+        assert_eq!(toml::from_str::<Config>(&text).unwrap(), c, "{text}");
     }
 
     #[test]

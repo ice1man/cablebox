@@ -6,6 +6,7 @@ use sysctl::services::State;
 
 use crate::app::{model, App};
 use crate::config::{AudioFormat, AuthMode, Quality};
+use crate::learn::{self, Learn};
 use crate::views::dialog::{Action, Dialog};
 use crate::{AppWindow, MenuItem, Screen};
 
@@ -19,6 +20,7 @@ pub enum Page {
     Sound,
     AudioDevice,
     Remote,
+    RemoteButtons,
     System,
     Clock,
     TzRegion,
@@ -68,6 +70,9 @@ enum Act {
     /// Settings → Sound → Output device; empty = Auto.
     AudioDevice(String),
     SetDateTime,
+    LearnRemote,
+    LearnKey(RemoteKey),
+    ResetButtons,
     Do(Action),
     None,
 }
@@ -444,13 +449,54 @@ impl App {
                 v.push(Item::new("Restart to apply", "", Act::Do(Action::RestartApp)));
                 v
             }
-            Page::Remote => vec![
-                Item::new("Remote & HDMI-CEC input", on_off(c.remote.cec), Act::Cycle(Field::Cec)),
-                Item::new("CEC device name", c.remote.cec_name.clone(), Act::Edit(Field::CecName)),
-                Item::info("Keyboard", "0-9 . channels · G guide · I info · M menu · D recordings"),
-                Item::info("", "R record · F favorite · F1-F4 colour keys · Esc back"),
-                Item::info("", "F11 full screen (in a window)"),
-            ],
+            Page::Remote => {
+                let mut v = vec![Item::new("Remote & HDMI-CEC input", on_off(c.remote.cec), Act::Cycle(Field::Cec))];
+                match &self.remote {
+                    Some(remote) => {
+                        let receivers = remote.receivers();
+                        v.extend([
+                            Item::info("Receiver", if receivers.is_empty() { "None detected".into() } else { receivers.join(", ") }),
+                            Item::new("Learn a remote", "", Act::LearnRemote),
+                            Item::new("Buttons", format!("{} learned", c.remote.buttons.len()), Act::Open(Page::RemoteButtons)),
+                            Item::new("Reset learned buttons", "", Act::ResetButtons),
+                        ]);
+                        if let Some(info) = remote.pico() {
+                            let bundled = learn::bundled_firmware_version(info.model);
+                            v.push(Item::info("Receiver model", info.model.to_string()));
+                            v.push(if learn::firmware_update_available(&info, bundled) {
+                                let update = bundled.map(|b| format!("{} · update to {b}", info.version)).unwrap_or_default();
+                                Item::new("Receiver firmware", update, Act::Do(Action::UpdatePico))
+                            } else {
+                                Item::info("Receiver firmware", info.version.to_string())
+                            });
+                            if !info.compatible {
+                                v.push(Item::info("Receiver", "Needs this update before it can be used"));
+                            }
+                            if let Some((peak, noise)) = info.signal {
+                                v.push(Item::info("Signal", format!("peak {peak} · background {noise}")));
+                            }
+                        }
+                    }
+                    None => v.push(Item::info("Learn a remote", "Needs remote input on, on a box")),
+                }
+                v.extend([
+                    Item::new("CEC device name", c.remote.cec_name.clone(), Act::Edit(Field::CecName)),
+                    Item::info("Keyboard", "0-9 . channels · G guide · I info · M menu · D recordings"),
+                    Item::info("", "R record · F favorite · F1-F4 colour keys · Esc back"),
+                    Item::info("", "F11 full screen (in a window)"),
+                ]);
+                v
+            }
+            Page::RemoteButtons => {
+                let learned = learn::parse_table(&c.remote.buttons);
+                RemoteKey::ALL
+                    .into_iter()
+                    .map(|k| {
+                        let value = if learned.values().any(|v| *v == k) { "Learned" } else { "Not learned" };
+                        Item::new(k.label(), value, Act::LearnKey(k))
+                    })
+                    .collect()
+            }
             Page::System => vec![
                 Item::info("Version", env!("CARGO_PKG_VERSION")),
                 Item::new("Check for updates", self.updates.summary(), Act::CheckUpdates),
@@ -576,6 +622,13 @@ impl App {
                 self.menu.stack.pop();
             }
             Act::SetDateTime => self.ask_datetime(),
+            Act::LearnRemote => self.start_learning(Learn::remote()),
+            Act::LearnKey(k) => self.start_learning(Learn::key(k, &learn::parse_table(&self.cfg.remote.buttons))),
+            Act::ResetButtons => self.show_dialog(Dialog::new(
+                "Reset learned buttons?",
+                "Forgets every button taught to CableBox. Remotes that only work because they were learned stop working until you learn them again.",
+                vec![("Reset", Action::ResetButtons), ("Cancel", Action::Close)],
+            )),
             Act::Ssh => {
                 let on = self.menu.ssh != Some(State::Running);
                 let (title, body, label) = if on {
@@ -840,7 +893,8 @@ impl App {
             Page::Display => ("DISPLAY", "◀ ▶ change options. Screen and resolution apply after a restart. Hardware acceleration uses the GPU to decode video, scale it and generate frames. Smooth motion blends frames to the screen's refresh rate (helps 24 fps films). High picture quality needs a strong GPU; keep Standard on a Raspberry Pi. Refresh target draws less often to save power; below Full it thins the video and turns Smooth motion off."),
             Page::Sound => ("SOUND", "◀ ▶ change options. Passthrough sends Dolby Digital untouched to a soundbar or receiver; pick its HDMI output first, and use it only if it decodes Dolby Digital, or you'll hear nothing. Night mode evens out loud ads and quiet dialogue."),
             Page::AudioDevice => ("OUTPUT DEVICE", "Choose where sound plays. Auto uses the system's default output."),
-            Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC."),
+            Page::Remote => ("REMOTE CONTROL", "Most TVs pass their remote's buttons to CableBox over HDMI-CEC. With an IR receiver, Learn a remote teaches CableBox any remote it can decode. A USB keyboard always works, and Esc cancels learning."),
+            Page::RemoteButtons => ("REMOTE BUTTONS", "Choose a key, then press the button you want for it. CH+/CH− page through the list."),
             Page::System => ("SYSTEM", "Updates are installed from your distribution's package repositories."),
             Page::Clock => ("CLOCK", "◀ ▶ change options. With automatic time off, you can set the date and time yourself."),
             Page::TzRegion => ("TIME ZONE", "Choose a region. CH+/CH− page through long lists."),

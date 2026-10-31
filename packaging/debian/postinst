@@ -15,6 +15,12 @@ fi
 
 #DEBHELPER#
 
+# Apply the IR receiver rule to receivers that are already plugged in.
+if [ "$1" = "configure" ] && command -v udevadm >/dev/null; then
+    udevadm control --reload >/dev/null 2>&1 || true
+    udevadm trigger --action=add --subsystem-match=rc >/dev/null 2>&1 || true
+fi
+
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
     # Upgrades: pick up the new binary if the session is running.

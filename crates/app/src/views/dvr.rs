@@ -9,6 +9,7 @@ use crate::{AppWindow, DvrItem, Screen};
 /// Rows shown at the 720-high design size; the UI reports the real number.
 const DEFAULT_PAGE: usize = 9;
 const TABS: usize = 3;
+const RECORDED_TAB: usize = 1;
 
 #[derive(Debug)]
 pub struct DvrState {
@@ -30,9 +31,22 @@ impl DvrState {
     }
 }
 
+/// What OK offers on a recording. Play comes first, so it's what's selected.
+fn recording_options(e: &tvh::DvrEntry) -> Dialog {
+    Dialog::new(
+        e.disp_title.clone(),
+        e.disp_description.clone().unwrap_or_default(),
+        vec![
+            ("Play", Action::PlayRecording(e.uuid.clone())),
+            ("Delete", Action::RemoveRecording(e.uuid.clone())),
+            ("Close", Action::Close),
+        ],
+    )
+}
+
 impl App {
     pub fn open_dvr(&mut self) {
-        self.dvr = DvrState { tab: 1, sel: 0, visible: self.dvr.visible };
+        self.dvr = DvrState { tab: RECORDED_TAB, sel: 0, visible: self.dvr.visible };
         self.screen = Screen::Dvr;
         self.refresh_dvr();
     }
@@ -69,7 +83,8 @@ impl App {
             RemoteKey::ChannelDown | RemoteKey::PageDown => {
                 self.dvr.sel = (self.dvr.sel + self.dvr.visible).min(len.saturating_sub(1))
             }
-            RemoteKey::Ok | RemoteKey::PlayPause => self.dvr_activate(),
+            RemoteKey::Ok => self.dvr_activate(),
+            RemoteKey::PlayPause => self.dvr_play(),
             RemoteKey::Red | RemoteKey::Stop => self.dvr_delete(),
             RemoteKey::Back => self.go_live(),
             _ => {}
@@ -81,17 +96,18 @@ impl App {
             0 => self.dvr_delete(),
             1 => {
                 let Some(e) = self.finished_sorted().get(self.dvr.sel).map(|e| (*e).clone()) else { return };
-                self.show_dialog(Dialog::new(
-                    e.disp_title.clone(),
-                    e.disp_description.clone().unwrap_or_default(),
-                    vec![
-                        ("Play", Action::PlayRecording(e.uuid.clone())),
-                        ("Delete", Action::RemoveRecording(e.uuid.clone())),
-                        ("Close", Action::Close),
-                    ],
-                ));
+                self.show_dialog(recording_options(&e));
             }
             _ => self.dvr_delete(),
+        }
+    }
+
+    /// The Play button only ever plays: elsewhere on this screen there's nothing to play.
+    fn dvr_play(&mut self) {
+        let uuid = (self.dvr.tab == RECORDED_TAB).then(|| self.finished_sorted().get(self.dvr.sel).map(|e| e.uuid.clone())).flatten();
+        match uuid {
+            Some(uuid) => self.run_action(Action::PlayRecording(uuid)),
+            None => self.toast("Nothing to play here"),
         }
     }
 
@@ -121,8 +137,9 @@ impl App {
                 )
             }),
         };
+        // These can't be undone, so OK alone must not do them.
         if let Some(d) = dialog {
-            self.show_dialog(d);
+            self.show_dialog(d.safe_choice_selected());
         }
     }
 
@@ -213,4 +230,17 @@ fn size_label(bytes: Option<u64>) -> String {
         Some(b) if b > 0 => format!("{} MB", b >> 20),
         _ => "Recorded".into(),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recordings_options_start_on_play() {
+        let e: tvh::DvrEntry = toml::from_str("uuid = \"u\"\ndisp_title = \"Film\"\nstart = 0\nstop = 0\n").unwrap();
+        let d = recording_options(&e);
+        assert_eq!(d.buttons[d.selected].1, Action::PlayRecording("u".into()));
+    }
+
 }

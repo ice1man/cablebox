@@ -1,0 +1,12 @@
+[package]
+name = "ir-proto"
+description = "Messages between CableBox and the Pico IR receiver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive"] }
+postcard = { version = "1", default-features = false }

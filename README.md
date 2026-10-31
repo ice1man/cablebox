@@ -24,6 +24,7 @@ Wi-Fi and system updates all happen on screen.
   *"System Update Available — Install Now / Later"* prompt and a progress bar. It offers a reboot
   when one is needed, and a restart when CableBox updated itself.
 - **Input**: keyboard, IR receivers, and HDMI-CEC (your TV's remote), all through one key map.
+  Settings can learn any remote an IR receiver can decode.
 - **Also a desktop app**: started from a desktop it opens in a window (F11 for full screen).
 
 Runs on x86_64, Raspberry Pi 4/5 (arm64) and RISC-V boards (riscv64), on Debian 13 or
@@ -59,6 +60,12 @@ and no letter keys) and maps them in `input/src/remote.rs`. For CEC, `cablebox-c
 `cec-ctl --playback` so the TV forwards its remote's buttons. That covers the Pi's built-in HDMI-CEC
 and Pulse-Eight USB adapters (via `inputattach --pulse8-cec`). libcec isn't needed.
 
+Learned buttons are identified by the scancode rc-core reports (`MSC_SCAN`), which it sends even
+for buttons with no keymap entry, and live in CableBox's config rather than the kernel keymap, so
+the sandboxed service needs no extra privileges. `input/src/learn.rs` turns raw events into
+presses. `70-cablebox-ir.rules` turns on all IR protocols, since a receiver otherwise decodes only
+its stock remote's.
+
 ## Development
 
 Build dependencies (Debian):
@@ -84,6 +91,16 @@ auth = "none"
 cec = false
 EOF
 CABLEBOX_CONFIG=/tmp/cb.toml SLINT_BACKEND=winit cargo run -p cablebox
+```
+
+To work on the receiver's Settings pages with no hardware, run a simulated Pico and point a window
+at it. Set `auto_check = false` under `[updates]` first: `CABLEBOX_PRETEND_BOX` enables the box-only
+actions, so the update prompt there acts on this machine.
+
+```sh
+cargo run -p input --example fake_pico -- /tmp/pico    # then type: ir nec 1 10, fail hash, quit
+CABLEBOX_PRETEND_BOX=1 CABLEBOX_PICO_DEVICE=/tmp/pico CABLEBOX_CONFIG=/tmp/cb.toml \
+    SLINT_BACKEND=winit cargo run -p cablebox
 ```
 
 Keyboard: `0-9` `.` channels · arrows / Enter / Esc · `G` guide · `I` info · `M` menu ·
@@ -145,6 +162,13 @@ without a password. The service takes over tty1. Its config lives in
 `/var/lib/cablebox/.config/cablebox/config.toml`, and the first boot shows the setup screen.
 
 ## Settings
+
+If `config.toml` has an error, CableBox says where, runs on default settings, and never writes to the
+file. Fix it and restart, or choose one of:
+- **Repair File** comments out the bad lines, listing them, and keeps the rest of your settings. The
+  original is copied to `config.toml.bad`, which is the lasting copy of those lines: the comments go
+  the next time settings are saved. A bad section header has to be fixed by hand.
+- **Start Fresh** moves the file to `config.toml.bad` and begins again.
 
 Everything below is on screen; values are saved to the config file right away.
 
@@ -222,6 +246,36 @@ mpv's warnings and errors appear in CableBox's log (`journalctl -u cablebox`), p
   buffered. Live TV plays close to the live edge, so a buffer near 0 s is normal; it matters
   when it stays at 0 and the picture stutters.
 
+### Remote
+
+`Settings → Remote control → Learn a remote` walks through the buttons on any remote your IR
+receiver can decode: OK, the arrows and Back are required, and pressing the new OK skips the rest.
+Nothing changes until you press the new OK to save at the end, so a mistake can't lock you out;
+the new Back discards it. Learned buttons add to the built-in key map and take priority over it,
+so several remotes can work together.
+
+- **Buttons** relearns a single key, replacing that key's earlier learned buttons.
+- **Reset learned buttons** forgets them all.
+- **Receiver** shows what was detected. It needs "Remote & HDMI-CEC input" on, and a box rather
+  than a desktop window.
+- A USB keyboard never goes through the learned buttons, so it always works, and Esc cancels
+  learning. Learning also gives up after 20 seconds with no button, which usually means the
+  receiver can't decode that remote.
+
+They're saved as `[remote.buttons]` in `config.toml`, e.g. `"scan:800f0422" = "ok"`. Deleting that
+section over SSH has the same effect as resetting.
+
+With a Pico IR receiver connected, this page also shows its firmware version and signal level, and
+offers an update when the package ships newer firmware (with one prompt per version). It has no
+built-in key map, so its remote must be learned using a USB keyboard or another working remote. An
+interrupted or failed update leaves the receiver on its previous firmware.
+
+Each hardware design has a model number, reported by its firmware. IR1 is the Pico with a bare
+photodiode. Firmware is built for one model and ships in its own folder
+(`/usr/share/cablebox/firmware/ir1/`). CableBox only offers a receiver its own model's firmware, and
+the receiver also refuses any other model's before erasing anything, so a later design can't be
+overwritten with IR1 firmware. A new design takes the next number, and numbers are never reused.
+
 ## Running in a window
 
 Started from a desktop (the **CableBox** menu entry, or `cablebox` in a terminal), CableBox opens in
@@ -282,6 +336,13 @@ Still to verify on hardware:
   `Settings → Display → Hardware acceleration`).
 - Dolby Digital passthrough into a real soundbar or receiver.
 - CEC key mapping with real TVs.
+- Learning a remote end to end. The logic has unit tests, but it hasn't yet run with a real IR
+  receiver or `rc-loopback`, and neither has the udev rule. In particular: whether receivers
+  accept `protocols=all`, and whether the `ir-keytable` rule from `v4l-utils` resets it afterwards.
+- The Pico receiver. CableBox's side (`input/src/pico.rs`, `ir-proto`) is tested only against a
+  simulated receiver, and is inactive in the package: no firmware ships, and there's no udev rule
+  for the receiver until it has a real USB ID. The firmware in `firmware/rp2040` runs on a Pico
+  only without its bootloader and doesn't yet recognise remotes reliably.
 - Whether `/sys/class/drm/*/modes` order matches `SLINT_DRM_MODE` indices.
 - The systemd sandbox with real DRM, audio and remotes. It was tested locally with the
   winit backend under the same seccomp/namespace settings. If something breaks on a box,

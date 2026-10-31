@@ -1,0 +1,8 @@
+[package]
+name = "ir-signal"
+description = "Finds an IR remote's 38 kHz carrier in ADC samples from a bare photodiode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true

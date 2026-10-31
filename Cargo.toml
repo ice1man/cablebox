@@ -1,9 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/tvh", "crates/player", "crates/input", "crates/sysctl", "crates/app"]
+members = ["crates/tvh", "crates/player", "crates/input", "crates/ir-proto", "crates/ir-signal", "crates/sysctl", "crates/app"]
+exclude = ["firmware/rp2040"]
 
 [workspace.package]
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 rust-version = "1.89"
 license = "GPL-2.0-or-later"

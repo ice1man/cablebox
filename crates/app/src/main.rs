@@ -10,6 +10,7 @@ mod debug;
 mod display;
 mod entry;
 mod guide;
+mod learn;
 mod lineup;
 mod pin;
 mod sound;
@@ -46,10 +47,13 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cfg = Config::load().unwrap_or_else(|e| {
-        tracing::error!("{e:#}; using defaults");
-        Config::default()
-    });
+    let (cfg, config_problem) = match Config::load() {
+        Ok(cfg) => (cfg, None),
+        Err(problem) => {
+            tracing::error!("{}: {}; using defaults and leaving the file alone", problem.path.display(), problem.message);
+            (Config::default(), Some(problem))
+        }
+    };
 
     // Must happen before the Slint backend initializes.
     let session = display::init_session();
@@ -85,14 +89,20 @@ fn main() -> anyhow::Result<()> {
     });
 
     // In a window the keyboard arrives through the window; don't grab the desktop's devices.
-    if cfg.remote.cec && session == Session::Tv {
-        input::remote::spawn(|k| app::post(move |a| a.on_key(k)));
-    }
+    // Development only: a window can serve a receiver at a given path, to work on its Settings.
+    let pretend_pico = std::env::var_os("CABLEBOX_PICO_DEVICE").filter(|_| std::env::var_os("CABLEBOX_PRETEND_BOX").is_some());
+    let on_event = |e| app::post(move |a| a.on_remote_event(e));
+    let bindings = learn::parse_table(&cfg.remote.buttons);
+    let remote = match (cfg.remote.cec, session, pretend_pico) {
+        (true, Session::Tv, _) => Some(input::remote::spawn(bindings, on_event)),
+        (true, Session::Window, Some(path)) => Some(input::remote::spawn_pico_only(path.into(), bindings, on_event)),
+        _ => None,
+    };
     if let Some(path) = std::env::var_os("CABLEBOX_CONTROL") {
         input::control::spawn(path.into(), |k| app::post(move |a| a.on_key(k)));
     }
 
-    app::install(App::new(&ui, rt.handle().clone(), player, cfg));
+    app::install(App::new(&ui, rt.handle().clone(), player, cfg, config_problem, remote));
 
     let ticker = Timer::default();
     ticker.start(TimerMode::Repeated, Duration::from_millis(200), || {

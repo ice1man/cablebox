@@ -1,13 +1,20 @@
 //! Modal dialogs: confirmations, record options, update prompts.
 
+use input::learn::Button;
+use input::pico::UpdateStatus;
 use input::RemoteKey;
 use tvh::EpgEvent;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::app::{fmt_range, model, App};
+use crate::learn::{self, Learn, Outcome};
 use crate::pin::{self, Check};
 use crate::{AppWindow, Screen};
+
+/// With no button pressed for this long, a learning run gives up. It's also the way out
+/// when only a remote is connected and it can't be decoded.
+const LEARN_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -30,6 +37,14 @@ pub enum Action {
     SetSsh(bool),
     /// Stop CableBox and show a login prompt on the TV.
     ExitToConsole,
+    /// Forget every remote button taught in Settings.
+    ResetButtons,
+    /// Install the bundled firmware on the Pico receiver.
+    UpdatePico,
+    /// Move an unreadable settings file aside and start saving again.
+    StartFreshConfig,
+    /// Comment out the bad lines in an unreadable settings file.
+    RepairConfig,
 }
 
 /// What a PIN prompt is for.
@@ -70,6 +85,8 @@ pub struct Dialog {
     pub progress: Option<f32>,
     /// Set when this dialog is a PIN prompt (digits typed with the remote).
     pub pin: Option<PinPrompt>,
+    /// Set while learning a remote, with when it gives up.
+    pub learn: Option<(Learn, Instant)>,
 }
 
 impl Dialog {
@@ -81,6 +98,7 @@ impl Dialog {
             selected: 0,
             progress: None,
             pin: None,
+            learn: None,
         }
     }
 
@@ -114,8 +132,27 @@ impl Dialog {
         };
     }
 
+    /// Starts on the last button, which is always the safe choice.
+    pub fn safe_choice_selected(mut self) -> Self {
+        self.selected = self.buttons.len().saturating_sub(1);
+        self
+    }
+
     pub fn busy(title: impl Into<String>, body: impl Into<String>) -> Self {
         Self { progress: Some(0.0), ..Self::new(title, body, vec![]) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destructive_dialogs_can_start_on_the_safe_choice() {
+        let d = Dialog::new("Remove?", "", vec![("Remove", Action::DeleteAutorec("x".into())), ("Keep", Action::Close)]);
+        assert_eq!(d.selected, 0);
+        let d = d.safe_choice_selected();
+        assert_eq!(d.buttons[d.selected].1, Action::Close);
     }
 }
 
@@ -124,7 +161,215 @@ impl App {
         self.dialog = Some(d);
     }
 
+    /// Explains an unreadable settings file. Keeping it is the default and what Back does.
+    pub fn offer_config_problem(&mut self) {
+        let Some(problem) = &self.config_problem else { return };
+        let body = format!(
+            "{}\n{}\n\nCableBox is using default settings for now and won't change this file. Fix it and restart, repair it by commenting out the bad lines, or start fresh. Both keep a backup.",
+            problem.path.display(),
+            problem.message
+        );
+        self.show_config_problem("Settings file has an error", body);
+    }
+
+    fn show_config_problem(&mut self, title: &str, body: String) {
+        let mut d = Dialog::new(
+            title,
+            body,
+            vec![("Repair File", Action::RepairConfig), ("Start Fresh", Action::StartFreshConfig), ("Keep File", Action::Close)],
+        );
+        d.selected = 2;
+        self.show_dialog(d);
+    }
+
+    /// The defaults in use now would overwrite the repair, so saving stays off until a restart.
+    fn repair_config(&mut self) {
+        let Some(problem) = self.config_problem.clone() else { return };
+        match problem.repair() {
+            Ok(done) => {
+                tracing::info!("settings file repaired, original kept as {}", done.backup.display());
+                let lines: Vec<String> =
+                    done.removed.iter().map(|(n, line)| format!("Line {n}: {}", crate::config::describe_removed(line))).collect();
+                let body = format!(
+                    "Commented out, so these settings go back to their defaults:\n{}\n\nThe original is kept as {}. Restart to use your settings.",
+                    lines.join("\n"),
+                    done.backup.display()
+                );
+                self.show_dialog(Dialog::new("Settings file repaired", body, vec![("Restart", Action::RestartApp)]));
+            }
+            Err(why) => {
+                tracing::warn!("settings file not repaired: {why}");
+                let body = format!("{why}\n\n{}\nThe file wasn't changed. Fix it by hand and restart, or start fresh and keep it as a backup.", problem.path.display());
+                self.show_config_problem("Couldn't repair the file", body);
+            }
+        }
+    }
+
+    fn start_fresh_config(&mut self) {
+        let Some(problem) = self.config_problem.clone() else { return };
+        match problem.set_aside() {
+            Ok(backup) => {
+                tracing::info!("settings file moved to {}", backup.display());
+                self.config_problem = None;
+                self.save_config_now();
+                self.toast("Old settings kept as a backup");
+            }
+            Err(e) => {
+                tracing::error!("moving {}: {e}", problem.path.display());
+                self.toast("Could not move the settings file");
+            }
+        }
+    }
+
+    /// Starts learning. Until it ends, the remote's buttons are reported instead of acting.
+    pub fn start_learning(&mut self, learn: Learn) {
+        let Some(remote) = &self.remote else { return };
+        remote.set_capture(true);
+        let mut d = Dialog::new(learn.title(), learn.body(), vec![]);
+        d.learn = Some((learn, Instant::now() + LEARN_TIMEOUT));
+        self.show_dialog(d);
+    }
+
+    /// A button pressed on the remote while learning.
+    pub fn learn_press(&mut self, button: Button) {
+        let Some(d) = &mut self.dialog else { return };
+        let Some((learn, deadline)) = &mut d.learn else { return };
+        *deadline = Instant::now() + LEARN_TIMEOUT;
+        match learn.press(button) {
+            Outcome::Continue => {
+                d.title = learn.title();
+                d.body = learn.body();
+            }
+            Outcome::Save => {
+                learn.apply(&mut self.cfg.remote.buttons);
+                self.finish_learning();
+                self.apply_buttons();
+                self.save_config_now();
+                self.toast("Remote buttons saved");
+            }
+            Outcome::Discard => {
+                self.finish_learning();
+                self.toast("Nothing was changed");
+            }
+        }
+        self.render();
+    }
+
+    fn finish_learning(&mut self) {
+        self.dialog = None;
+        if let Some(remote) = &self.remote {
+            remote.set_capture(false);
+        }
+    }
+
+    /// Hands the saved table to the remote readers.
+    fn apply_buttons(&self) {
+        if let Some(remote) = &self.remote {
+            remote.set_bindings(learn::parse_table(&self.cfg.remote.buttons));
+        }
+    }
+
+    /// Gives up after the timeout, and makes sure the remote never stays captured once the
+    /// dialog is gone. Returns whether anything changed.
+    pub fn tick_learning(&mut self, now: Instant) -> bool {
+        let learning = self.dialog.as_ref().and_then(|d| d.learn.as_ref());
+        if learning.is_some_and(|(_, deadline)| now >= *deadline) {
+            self.finish_learning();
+            self.toast("No button seen. Nothing was changed. This remote's signal may not be supported.");
+            return true;
+        }
+        if learning.is_none() {
+            if let Some(remote) = self.remote.as_ref().filter(|r| r.capturing()) {
+                remote.set_capture(false);
+            }
+        }
+        false
+    }
+
+    /// The Pico receiver appeared, went away, or reported something new.
+    pub fn pico_changed(&mut self) {
+        self.offer_pico_update();
+        if self.screen == Screen::Menu || self.dialog.is_some() {
+            self.render();
+        }
+    }
+
+    /// Offers newer receiver firmware, once per version.
+    fn offer_pico_update(&mut self) {
+        let Some(info) = self.remote.as_ref().and_then(|r| r.pico()) else { return };
+        let Some(bundled) = learn::bundled_firmware_version(info.model) else { return };
+        if self.dialog.is_some() || self.pico_updating || !learn::firmware_update_available(&info, Some(bundled)) {
+            return;
+        }
+        let version = format!("{} {bundled}", info.model);
+        if self.cfg.remote.firmware_prompted.as_ref() == Some(&version) {
+            return;
+        }
+        self.cfg.remote.firmware_prompted = Some(version);
+        self.save_config_now();
+        self.show_dialog(Dialog::new(
+            "Update the IR receiver?",
+            format!("Firmware {bundled} is available (it has {}). The remote stops working for a few seconds during the update.", info.version),
+            vec![("Update", Action::UpdatePico), ("Later", Action::Close)],
+        ));
+    }
+
+    fn start_pico_update(&mut self) {
+        let Some(remote) = self.remote.clone() else { return };
+        let Some(info) = remote.pico() else {
+            self.toast("The IR receiver isn't connected");
+            return;
+        };
+        let firmware = match learn::bundled_firmware(info.model) {
+            Ok(firmware) => firmware,
+            Err(e) => {
+                tracing::error!("reading receiver firmware: {e}");
+                self.toast("Could not read the firmware file");
+                return;
+            }
+        };
+        if !remote.update_pico(firmware) {
+            self.toast("The IR receiver isn't connected");
+            return;
+        }
+        self.pico_updating = true;
+        self.show_dialog(Dialog::busy("Updating the IR receiver", "The remote won't work until this finishes. Don't unplug the receiver."));
+    }
+
+    pub fn pico_update(&mut self, status: UpdateStatus) {
+        match status {
+            UpdateStatus::Progress(p) => {
+                if let Some(d) = self.dialog.as_mut().filter(|d| d.progress.is_some()) {
+                    d.progress = Some(p);
+                }
+            }
+            UpdateStatus::Done(version) => {
+                self.pico_updating = false;
+                self.dialog = None;
+                self.toast(format!("IR receiver updated to {version}"));
+            }
+            UpdateStatus::Failed(e) => {
+                self.pico_updating = false;
+                self.show_dialog(Dialog::new(
+                    "IR receiver update failed",
+                    format!("{e} It keeps its previous firmware, so it should still work."),
+                    vec![("Try Again", Action::UpdatePico), ("Close", Action::Close)],
+                ));
+            }
+        }
+        self.render();
+    }
+
     pub fn dialog_key(&mut self, k: RemoteKey) {
+        // The remote's buttons don't come through here while learning, so this is the
+        // keyboard or the control FIFO.
+        if self.dialog.as_ref().is_some_and(|d| d.learn.is_some()) {
+            if matches!(k, RemoteKey::Back | RemoteKey::Exit) {
+                self.finish_learning();
+                self.toast("Nothing was changed");
+            }
+            return;
+        }
         if self.dialog.as_ref().is_some_and(|d| d.pin.is_some()) {
             self.pin_key(k);
             return;
@@ -167,6 +412,7 @@ impl App {
                 | Action::PowerOff
                 | Action::SetSsh(_)
                 | Action::ExitToConsole
+                | Action::UpdatePico
         );
         // Inside Settings the PIN was already entered once.
         let unlocked = self.settings_unlocked && self.screen == Screen::Menu;
@@ -311,6 +557,15 @@ impl App {
             }
             Action::SetSsh(on) => self.set_ssh(on),
             Action::ExitToConsole => self.exit_to_console(),
+            Action::UpdatePico => self.start_pico_update(),
+            Action::StartFreshConfig => self.start_fresh_config(),
+            Action::RepairConfig => self.repair_config(),
+            Action::ResetButtons => {
+                self.cfg.remote.buttons.clear();
+                self.apply_buttons();
+                self.save_config_now();
+                self.toast("Learned buttons cleared");
+            }
         }
     }
 
